@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { delimiter, dirname, join, win32 } from "node:path";
 import test from "node:test";
 
+import { resolveAgentBrowserCommand } from "../extensions/agent-browser/lib/command-resolution.js";
 import {
 	buildOwnedManagedSessionRestoreContext,
 	createManagedSessionRestoreKey,
@@ -24,7 +25,6 @@ import {
 import { buildProcessStartIdentityCommand, buildProcessStartIdentityCommands, normalizeProcessStartIdentity, processStartIdentitiesMatch, resolveProcessStartIdentityFromCommands } from "../extensions/agent-browser/lib/process-identity.js";
 import {
 	buildAgentBrowserProcessEnv,
-	buildAgentBrowserSpawnCommand,
 	ensureAgentBrowserSocketDir,
 	getAgentBrowserProcessTimeoutMs,
 	getAgentBrowserSocketDir,
@@ -32,11 +32,8 @@ import {
 	getWindowsExplicitDefaultNamespaceEnv,
 	isTrustedAndroidAppDataRoot,
 	isTrustedSocketDirAncestor,
-	isWindowsAgentBrowserCommandMissing,
 	prepareAgentBrowserSpawnArgs,
-	reorderWindowsLeadingGlobalArgs,
 	resolveSpawnedChildExitCode,
-	shouldCommitManagedRestoreAfterWindowsProcess,
 	runAgentBrowserProcess,
 } from "../extensions/agent-browser/lib/process.js";
 import { parseAgentBrowserEnvelope } from "../extensions/agent-browser/lib/results/envelope.js";
@@ -96,86 +93,86 @@ test("resolveSpawnedChildExitCode prefers close, then timeout, then exit fallbac
 	);
 });
 
-test("reorderWindowsLeadingGlobalArgs preserves supported global flag values", () => {
-	assert.deepEqual(
-		reorderWindowsLeadingGlobalArgs([
-			"--json",
-			"--session",
-			"managed-session",
-			"--proxy",
-			"http://127.0.0.1:8080",
-			"--headers",
-			'{"authorization":"Bearer token"}',
-			"--max-output",
-			"2000",
-			"open",
-			"https://example.com",
-		]),
-		[
-			"open",
-			"--json",
-			"--session",
-			"managed-session",
-			"--proxy",
-			"http://127.0.0.1:8080",
-			"--headers",
-			'{"authorization":"Bearer token"}',
-			"--max-output",
-			"2000",
-			"https://example.com",
-		],
-	);
-	assert.deepEqual(
-		reorderWindowsLeadingGlobalArgs(["--json", "--headed", "false", "--download-path", "/tmp/downloads", "open", "https://example.com"]),
-		["open", "--json", "--headed", "false", "--download-path", "/tmp/downloads", "https://example.com"],
-	);
-	assert.deepEqual(
-		reorderWindowsLeadingGlobalArgs(["--restore", "login-state", "open", "https://example.com"]),
-		["open", "--restore=login-state", "https://example.com"],
-	);
-	assert.deepEqual(
-		reorderWindowsLeadingGlobalArgs(["--restore", "open", "https://example.com"]),
-		["open", "--restore", "https://example.com"],
-	);
-	assert.deepEqual(
-		reorderWindowsLeadingGlobalArgs(["--restore=login-state", "open", "https://example.com"]),
-		["open", "--restore=login-state", "https://example.com"],
-	);
-	assert.deepEqual(
-		reorderWindowsLeadingGlobalArgs(["--hide-scrollbars", "false", "open", "https://example.com"]),
-		["open", "--hide-scrollbars", "false", "https://example.com"],
-	);
-	assert.deepEqual(
-		reorderWindowsLeadingGlobalArgs(["--hide-scrollbars", "open", "https://example.com"]),
-		["open", "--hide-scrollbars", "https://example.com"],
-	);
-	assert.deepEqual(
-		reorderWindowsLeadingGlobalArgs(["--json", "--namespace", "", "--session", "managed", "session", "info"]),
-		["session", "info", "--json", "--session", "managed"],
-	);
+test("resolveAgentBrowserCommand keeps the plain command outside Windows", async () => {
+	const resolved = await resolveAgentBrowserCommand({
+		env: { PATH: "/tmp/agent-browser-bin" },
+		platform: "linux",
+	});
+
+	assert.equal(resolved.command, "agent-browser");
+	assert.equal(resolved.resolution, "fallback");
+});
+
+test("resolveAgentBrowserCommand prefers Windows agent-browser.exe before npm cmd shims", async () => {
+	const tempDir = await mkdtemp(join(tmpdir(), "pi-agent-browser-resolve-"));
+	const cmdDir = join(tempDir, "cmd-bin");
+	const exeDir = join(tempDir, "exe-bin");
+	const shimTarget = join(cmdDir, "node_modules", "agent-browser", "bin", "agent-browser-win32-x64.exe");
+	const exePath = join(exeDir, "agent-browser.exe");
+
+	try {
+		await mkdir(dirname(shimTarget), { recursive: true });
+		await mkdir(exeDir, { recursive: true });
+		await writeFile(shimTarget, "native shim target", "utf8");
+		await writeFile(join(cmdDir, "agent-browser.cmd"), '@"%~dp0\\\\node_modules\\\\agent-browser\\\\bin\\\\agent-browser-win32-x64.exe" %*\n', "utf8");
+		await writeFile(exePath, "native exe", "utf8");
+
+		const resolved = await resolveAgentBrowserCommand({
+			env: { PATH: `${cmdDir};${exeDir}` },
+			platform: "win32",
+		});
+
+		assert.equal(resolved.command, exePath);
+		assert.equal(resolved.resolution, "path-exe");
+	} finally {
+		await rm(tempDir, { force: true, maxRetries: 5, recursive: true, retryDelay: 100 });
+	}
+});
+
+test("resolveAgentBrowserCommand resolves Windows npm cmd shims to the native agent-browser exe", async () => {
+	const tempDir = await mkdtemp(join(tmpdir(), "pi-agent-browser-resolve-"));
+	const shimTarget = join(tempDir, "node_modules", "agent-browser", "bin", "agent-browser-win32-x64.exe");
+
+	try {
+		await mkdir(dirname(shimTarget), { recursive: true });
+		await writeFile(shimTarget, "native shim target", "utf8");
+		await writeFile(join(tempDir, "agent-browser.cmd"), '@"%~dp0\\\\node_modules\\\\agent-browser\\\\bin\\\\agent-browser-win32-x64.exe" %*\n', "utf8");
+
+		const resolved = await resolveAgentBrowserCommand({
+			env: { Path: tempDir },
+			platform: "win32",
+		});
+
+		assert.equal(resolved.command, shimTarget);
+		assert.equal(resolved.resolution, "npm-cmd-shim");
+		assert.equal(resolved.shimPath, join(tempDir, "agent-browser.cmd"));
+	} finally {
+		await rm(tempDir, { force: true, maxRetries: 5, recursive: true, retryDelay: 100 });
+	}
+});
+
+test("resolveAgentBrowserCommand falls back when Windows npm cmd shims cannot be resolved", async () => {
+	const tempDir = await mkdtemp(join(tmpdir(), "pi-agent-browser-resolve-"));
+
+	try {
+		await writeFile(join(tempDir, "agent-browser.cmd"), "@echo custom shim\n", "utf8");
+
+		const resolved = await resolveAgentBrowserCommand({
+			env: { PATH: tempDir },
+			platform: "win32",
+		});
+
+		assert.equal(resolved.command, "agent-browser");
+		assert.equal(resolved.resolution, "fallback");
+	} finally {
+		await rm(tempDir, { force: true, maxRetries: 5, recursive: true, retryDelay: 100 });
+	}
+});
+
+test("getWindowsExplicitDefaultNamespaceEnv preserves explicit default namespaces", () => {
 	assert.deepEqual(getWindowsExplicitDefaultNamespaceEnv(["--namespace", "", "open", "https://example.com"], "prod", "win32"), { AGENT_BROWSER_NAMESPACE: "" });
 	assert.deepEqual(getWindowsExplicitDefaultNamespaceEnv(["open", "https://example.com"], "prod", "win32"), {});
 	assert.deepEqual(getWindowsExplicitDefaultNamespaceEnv(["--namespace", "", "open", "https://example.com"], "prod", "darwin"), {});
-	assert.deepEqual(
-		reorderWindowsLeadingGlobalArgs(["--json", "--args", "", "--allow-file-access", "false", "--session", "managed", "get", "url"]),
-		["get", "url", "--json", "--allow-file-access", "false", "--session", "managed"],
-	);
-	assert.deepEqual(
-		reorderWindowsLeadingGlobalArgs(["--json", "--session", "managed", "find", "role", "combobox", "select", "chocolate", "--name", "Flavor"]),
-		["find", "role", "--json", "--session", "managed", "combobox", "select", "chocolate", "--name", "Flavor"],
-	);
-	assert.deepEqual(
-		reorderWindowsLeadingGlobalArgs(["--json", "--session", "managed", "webmcp", "invoke", "search", "--params", `{"query":"Mitch's browser"}`]),
-		["webmcp", "invoke", "--json", "--session", "managed", "search", "--params", `{"query":"Mitch's browser"}`],
-	);
-	for (const invalid of [
-		["--json", "--body", "secret", "session", "list"],
-		["--auto-connect", "FALSE", "open", "https://example.com"],
-		["--auto-connect=false", "open", "https://example.com"],
-		["--download-path=/tmp/downloads", "open", "https://example.com"],
-	]) {
-		assert.deepEqual(reorderWindowsLeadingGlobalArgs(invalid), invalid);
-	}
 });
 
 test("prepareAgentBrowserSpawnArgs preserves caller launch controls", () => {
@@ -226,21 +223,6 @@ process.stdout.write(JSON.stringify({ success: true, data: { allowFileAccessEnv:
 });
 
 
-test("buildAgentBrowserSpawnCommand uses the npm cmd shim on Windows", () => {
-	assert.deepEqual(
-		buildAgentBrowserSpawnCommand(["--json", "--session", "managed", "open", "https://example.com"], "win32"),
-		{
-			command: "powershell.exe",
-			args: ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "$agentBrowser = Get-Command agent-browser.cmd -ErrorAction SilentlyContinue; if (-not $agentBrowser) { [Console]::Error.WriteLine('PI_AGENT_BROWSER_COMMAND_NOT_FOUND:agent-browser.cmd'); exit 127 }; & $agentBrowser.Source 'open' '--json' '--session' 'managed' 'https://example.com'"],
-		},
-	);
-	assert.match(
-		buildAgentBrowserSpawnCommand(["--json", "--session", "managed", "webmcp", "invoke", "search", "--params", `{"query":"Mitch's browser"}`], "win32").args.at(-1) ?? "",
-		/& \$agentBrowser\.Source 'webmcp' 'invoke' '--json' '--session' 'managed' 'search' '--params' '\{"query":"Mitch''s browser"\}'$/,
-	);
-	assert.deepEqual(buildAgentBrowserSpawnCommand(["--version"], "darwin"), { command: "agent-browser", args: ["--version"] });
-});
-
 test("process start identity commands use absolute POSIX fallbacks and native PowerShell on Windows", async () => {
 	const posixCommands = buildProcessStartIdentityCommands(123, "linux");
 	assert.deepEqual(posixCommands.map((command) => command.file), ["/bin/ps", "/usr/bin/ps"]);
@@ -264,16 +246,6 @@ test("process start identity commands use absolute POSIX fallbacks and native Po
 	assert.equal(normalizeProcessStartIdentity("  638000000000000000\r\n"), "638000000000000000");
 	assert.equal(processStartIdentitiesMatch("Sun Aug 3 00:00:00 2026", "win32-powershell-ticks-v1:638000000000000000"), false);
 	assert.equal(processStartIdentitiesMatch("win32-powershell-ticks-v1:1", "win32-powershell-ticks-v1:2"), false);
-});
-
-test("Windows managed restore commit excludes PowerShell command-not-found wrappers", () => {
-	const missing = "& : The term 'agent-browser.cmd' is not recognized as the name of a cmdlet. CategoryInfo: ObjectNotFound CommandNotFoundException";
-	assert.equal(isWindowsAgentBrowserCommandMissing(missing), true);
-	assert.equal(isWindowsAgentBrowserCommandMissing("PI_AGENT_BROWSER_COMMAND_NOT_FOUND:agent-browser.cmd"), true);
-	assert.equal(shouldCommitManagedRestoreAfterWindowsProcess({ exitCode: 1, stderr: missing }), false);
-	assert.equal(shouldCommitManagedRestoreAfterWindowsProcess({ exitCode: 1, stderr: "selector not found" }), true);
-	assert.equal(shouldCommitManagedRestoreAfterWindowsProcess({ exitCode: 0, stderr: "" }), true);
-	assert.equal(shouldCommitManagedRestoreAfterWindowsProcess({ exitCode: 127, spawnError: new Error("spawn powershell ENOENT"), stderr: "" }), false);
 });
 
 test("writeFakeAgentBrowserBinary installs Windows cmd launcher when platform is win32", async () => {

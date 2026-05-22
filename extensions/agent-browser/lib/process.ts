@@ -5,15 +5,8 @@ import { dirname, isAbsolute, join } from "node:path";
 import { env as processEnv, platform as processPlatform } from "node:process";
 
 import { parseArgvDescriptor } from "./argv-descriptor.js";
-import { isKnownCommandToken } from "./command-taxonomy.js";
-import {
-	extractExplicitSessionName,
-	getFlagName,
-	GLOBAL_BOOLEAN_FLAGS_WITH_OPTIONAL_VALUES,
-	GLOBAL_VALUE_FLAGS,
-	optionalGlobalValueFlagConsumesNext,
-	resolveAgentBrowserNamespace,
-} from "./argv-grammar.js";
+import { extractExplicitSessionName, resolveAgentBrowserNamespace } from "./argv-grammar.js";
+import { resolveAgentBrowserCommand } from "./command-resolution.js";
 import {
 	commitManagedSessionRestoreSuppression,
 	getManagedSessionRestoreEnv,
@@ -47,13 +40,7 @@ export const SAFE_AGENT_BROWSER_OPERATION_TIMEOUT_MS = 25_000;
 const DEFAULT_AGENT_BROWSER_PROCESS_TIMEOUT_MS = 35_000;
 /** Grace period after `exit` before resolving when `close` is delayed by inherited stdio handles. */
 const EXIT_STDIO_GRACE_MS = 100;
-const WINDOWS_AGENT_BROWSER_MISSING_MARKER = "PI_AGENT_BROWSER_COMMAND_NOT_FOUND:agent-browser.cmd";
 const attachedBrowserSessionContext = new AsyncLocalStorage<boolean>();
-const WINDOWS_COMMANDS_WITH_ADJACENT_SUBCOMMAND = new Set([
-	"auth", "clipboard", "cookies", "dashboard", "device", "dialog", "diff", "find", "get", "is", "keyboard",
-	"mouse", "network", "plugin", "profiler", "react", "record", "session", "set", "skills", "state", "storage",
-	"stream", "tab", "trace", "webmcp", "window",
-]);
 
 export function withAttachedBrowserSessionContext<T>(preserve: boolean, run: () => Promise<T>): Promise<T> {
 	return attachedBrowserSessionContext.run(preserve || attachedBrowserSessionContext.getStore() === true, run);
@@ -71,7 +58,7 @@ export function getWindowsExplicitDefaultNamespaceEnv(
 
 export interface ProcessRunResult {
 	aborted: boolean;
-	/** True once the native agent-browser executable, not merely the Windows PowerShell launcher, started. */
+	/** True once the native agent-browser executable started. */
 	agentBrowserStarted: boolean;
 	exitCode: number;
 	spawnError?: Error;
@@ -87,99 +74,9 @@ function appendTail(text: string, addition: string, maxChars: number): string {
 	return combined.length <= maxChars ? combined : combined.slice(combined.length - maxChars);
 }
 
-function quoteWindowsPowerShellArg(value: string): string {
-	return `'${value.replace(/'/g, "''")}'`;
-}
-
-/** Exported for unit tests that lock Windows launcher argv ordering. */
-export function reorderWindowsLeadingGlobalArgs(args: string[]): string[] {
-	const leadingGlobals: string[] = [];
-	for (let index = 0; index < args.length; index += 1) {
-		const token = args[index] as string;
-		if (isKnownCommandToken(token)) {
-			if (index === 0) return args;
-			const firstPositional = args[index + 1];
-			return WINDOWS_COMMANDS_WITH_ADJACENT_SUBCOMMAND.has(token) && firstPositional && !firstPositional.startsWith("-")
-				? [token, firstPositional, ...leadingGlobals, ...args.slice(index + 2)]
-				: [token, ...leadingGlobals, ...args.slice(index + 1)];
-		}
-		if (!token.startsWith("-")) return args;
-		if (token.startsWith("--restore=")) {
-			leadingGlobals.push(token);
-			continue;
-		}
-		if (token === "--restore") {
-			const value = args[index + 1];
-			if (optionalGlobalValueFlagConsumesNext(token, value)) {
-				leadingGlobals.push(`--restore=${value}`);
-				index += 1;
-			} else {
-				leadingGlobals.push(token);
-			}
-			continue;
-		}
-		if (token.includes("=")) return args;
-		const flag = getFlagName(token);
-		if (GLOBAL_BOOLEAN_FLAGS_WITH_OPTIONAL_VALUES.has(flag)) {
-			leadingGlobals.push(token);
-			if (["true", "false"].includes(args[index + 1] ?? "")) {
-				leadingGlobals.push(args[index + 1] as string);
-				index += 1;
-			}
-			continue;
-		}
-		if (GLOBAL_VALUE_FLAGS.includes(flag as typeof GLOBAL_VALUE_FLAGS[number])) {
-			const value = args[index + 1];
-			if (value === undefined) return args;
-			// PowerShell -> .cmd drops empty argv values. Planning rejects empty
-			// caller --args; keep this defensive skip so an unexpected empty value
-			// cannot turn the next flag into its accidental value on native Windows.
-			if (value === "" && (flag === "--args" || flag === "--namespace")) {
-				index += 1;
-				continue;
-			}
-			leadingGlobals.push(token, value);
-			index += 1;
-			continue;
-		}
-		return args;
-	}
-	return args;
-}
-
 export function prepareAgentBrowserSpawnArgs(args: string[], wrapperCompatibilityUserAgent?: string, preserveAttachedBrowserSession = false): string[] {
 	if (preserveAttachedBrowserSession || !wrapperCompatibilityUserAgent) return args;
 	return ["--args", `--user-agent=${wrapperCompatibilityUserAgent.replaceAll(/[\r\n,]/g, "")}`, ...args];
-}
-
-export function buildAgentBrowserSpawnCommand(args: string[], platform: NodeJS.Platform = processPlatform): { command: string; args: string[] } {
-	if (platform !== "win32") {
-		return { command: "agent-browser", args };
-	}
-	const invocationArgs = reorderWindowsLeadingGlobalArgs(args).map(quoteWindowsPowerShellArg).join(" ");
-	const commandLine = [
-		"$agentBrowser = Get-Command agent-browser.cmd -ErrorAction SilentlyContinue;",
-		`if (-not $agentBrowser) { [Console]::Error.WriteLine('${WINDOWS_AGENT_BROWSER_MISSING_MARKER}'); exit 127 };`,
-		`& $agentBrowser.Source ${invocationArgs}`.trimEnd(),
-	].join(" ");
-	return { command: "powershell.exe", args: ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", commandLine] };
-}
-
-export function isWindowsAgentBrowserCommandMissing(stderr: string): boolean {
-	const normalized = stderr.toLowerCase();
-	return normalized.includes(WINDOWS_AGENT_BROWSER_MISSING_MARKER.toLowerCase()) || (normalized.includes("agent-browser.cmd") && (
-		normalized.includes("commandnotfoundexception") ||
-		normalized.includes("not recognized as the name of a cmdlet") ||
-		normalized.includes("not recognized as an internal or external command")
-	));
-}
-
-export function shouldCommitManagedRestoreAfterWindowsProcess(input: {
-	exitCode: number;
-	spawnError?: Error;
-	stderr: string;
-}): boolean {
-	return !input.spawnError && !(input.exitCode !== 0 && isWindowsAgentBrowserCommandMissing(input.stderr));
 }
 
 function terminateSpawnedChild(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void {
@@ -545,6 +442,11 @@ export async function runAgentBrowserProcess(options: {
 	if (signal?.aborted) {
 		return { aborted: true, agentBrowserStarted: false, exitCode: 1, stderr: "", stdout: "", timedOut: false };
 	}
+	const childEnv = buildAgentBrowserProcessEnv(parentEnv, effectiveEnv);
+	const agentBrowserCommand = (await resolveAgentBrowserCommand({ env: childEnv })).command;
+	if (signal?.aborted) {
+		return { aborted: true, agentBrowserStarted: false, exitCode: 1, stderr: "", stdout: "", timedOut: false };
+	}
 	return await new Promise<ProcessRunResult>((resolve) => {
 		let aborted = false;
 		let agentBrowserStarted = false;
@@ -620,13 +522,6 @@ export async function runAgentBrowserProcess(options: {
 				if (stdoutSpillHandle) {
 					await stdoutSpillHandle.close().catch(() => undefined);
 				}
-				const windowsMissingBinary = processPlatform === "win32" && exitCode !== 0 && isWindowsAgentBrowserCommandMissing(stderr);
-				if (processPlatform === "win32" && !windowsMissingBinary && !spawnError) agentBrowserStarted = true;
-				if (windowsMissingBinary && !spawnError) {
-					spawnError = Object.assign(new Error("spawn agent-browser ENOENT"), { code: "ENOENT" });
-				} else if (processPlatform === "win32" && shouldCommitManagedRestoreAfterWindowsProcess({ exitCode, spawnError, stderr })) {
-					commitManagedSessionRestoreSuppression(managedSessionRestoreOptions);
-				}
 				if (!spawnError && stdoutSpillError) {
 					spawnError = stdoutSpillError;
 				}
@@ -646,24 +541,24 @@ export async function runAgentBrowserProcess(options: {
 			});
 		};
 
-		const childEnv = buildAgentBrowserProcessEnv(parentEnv, effectiveEnv);
 		const spawnPolicyError = getManagedPreSpawnPolicyError(managedSessionRestoreOptions, managedStateCurrentPageUrl, managedStatePageUrlUnknown, trustedFirstBatchTabSelection);
 		if (spawnPolicyError) {
 			resolve({ aborted: false, agentBrowserStarted: false, exitCode: 1, spawnError: new Error(spawnPolicyError), stderr: "", stdout: "", timedOut: false });
 			return;
 		}
-		const spawnCommand = buildAgentBrowserSpawnCommand(prepareAgentBrowserSpawnArgs(args, ownedManagedSessionCompatibilityEnv.AGENT_BROWSER_USER_AGENT, preserveAttachedBrowserSession));
-		const child = spawn(spawnCommand.command, spawnCommand.args, {
-			cwd,
-			env: childEnv,
-			stdio: ["pipe", "pipe", "pipe"],
+		const child = spawn(
+			agentBrowserCommand,
+			prepareAgentBrowserSpawnArgs(args, ownedManagedSessionCompatibilityEnv.AGENT_BROWSER_USER_AGENT, preserveAttachedBrowserSession),
+			{
+				cwd,
+				env: childEnv,
+				stdio: ["pipe", "pipe", "pipe"],
+			},
+		);
+		child.once("spawn", () => {
+			agentBrowserStarted = true;
+			commitManagedSessionRestoreSuppression(managedSessionRestoreOptions);
 		});
-		if (processPlatform !== "win32") {
-			child.once("spawn", () => {
-				agentBrowserStarted = true;
-				commitManagedSessionRestoreSuppression(managedSessionRestoreOptions);
-			});
-		}
 
 		const terminateChild = (reason: "abort" | "timeout") => {
 			if (settled) return;
