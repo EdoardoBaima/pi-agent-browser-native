@@ -2,6 +2,11 @@
 
 Native `pi` integration of `agent-browser` as a `pi` tool.
 
+## Repository lineage
+
+This repository is EdoardoBaima's fork of `fitchmultz/pi-agent-browser-native`.
+Treat `upstream` as the original GitHub project and `origin` / `byco` as maintained fork remotes.
+
 ## Product-specific guidance
 
 - Do **not** bundle `agent-browser` in this project.
