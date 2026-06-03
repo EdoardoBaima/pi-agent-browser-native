@@ -5,7 +5,8 @@ Native `pi` integration of `agent-browser` as a `pi` tool.
 ## Repository lineage
 
 This repository is EdoardoBaima's fork of `fitchmultz/pi-agent-browser-native`.
-Treat `upstream` as the original GitHub project and `origin` / `byco` as maintained fork remotes.
+Treat `upstream` as the original GitHub project, `origin` as the GitHub fork used for upstream PRs, and `byco` as the company on-prem Forgejo copy.
+Do not rename or collapse these remotes; push PR branches to `origin` and mirror/share company-visible work to `byco` explicitly.
 
 ## Product-specific guidance
 
