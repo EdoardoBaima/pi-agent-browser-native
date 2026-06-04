@@ -7,11 +7,12 @@
  */
 
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { getEventListeners } from "node:events";
+import { execFileSync, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { EventEmitter, getEventListeners } from "node:events";
 import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, win32 } from "node:path";
+import { PassThrough } from "node:stream";
 import test from "node:test";
 
 import { resolveAgentBrowserCommand } from "../extensions/agent-browser/lib/command-resolution.js";
@@ -445,6 +446,48 @@ test("runAgentBrowserProcess stops a hung upstream client at the wrapper watchdo
 		assert.equal(processResult.aborted, false);
 		assert.equal(processResult.exitCode, 124);
 		assert.ok(Date.now() - startedAt < 2_000);
+	} finally {
+		await rm(tempDir, { force: true, maxRetries: 5, recursive: true, retryDelay: 100 });
+	}
+});
+
+test("runAgentBrowserProcess returns a forced timeout result when upstream never emits close", async () => {
+	const tempDir = await mkdtemp(join(tmpdir(), "pi-agent-browser-forced-result-"));
+	const processEvents = new EventEmitter();
+	const killSignals: string[] = [];
+	const fakeChild = {
+		pid: 12345,
+		stdin: new PassThrough(),
+		stdout: new PassThrough(),
+		stderr: new PassThrough(),
+		kill(signal?: NodeJS.Signals | number) {
+			killSignals.push(String(signal));
+			return true;
+		},
+		once: processEvents.once.bind(processEvents),
+	} as unknown as ChildProcessWithoutNullStreams;
+
+	try {
+		const startedAt = Date.now();
+		const processResult = await runAgentBrowserProcess({
+			args: ["open", "about:blank"],
+			cwd: tempDir,
+			forcedResultGraceMs: 50,
+			platform: "linux",
+			spawnProcess: () => fakeChild,
+			timeoutMs: 10,
+		});
+
+		assert.equal(processResult.timedOut, true);
+		assert.equal(processResult.timeoutMs, 10);
+		assert.equal(processResult.aborted, false);
+		assert.equal(processResult.exitCode, 124);
+		assert.equal(processResult.forcedResult, true);
+		assert.equal(processResult.forcedResultReason, "timeout");
+		assert.equal(processResult.processTreeCleanup, undefined);
+		assert.match(processResult.stderr, /Forced timeout result/);
+		assert.deepEqual(killSignals, ["SIGTERM"]);
+		assert.ok(Date.now() - startedAt < 1_000);
 	} finally {
 		await rm(tempDir, { force: true, maxRetries: 5, recursive: true, retryDelay: 100 });
 	}

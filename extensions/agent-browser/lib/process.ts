@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { execFile, type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { lstat, mkdir, readdir } from "node:fs/promises";
 import { dirname, isAbsolute, join } from "node:path";
 import { env as processEnv, platform as processPlatform } from "node:process";
@@ -38,9 +38,29 @@ const DEFAULT_AGENT_BROWSER_SOCKET_DIR_PREFIX = "/tmp/piab";
 const TERMUX_PACKAGE_NAME_PATTERN = /^[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+$/;
 export const SAFE_AGENT_BROWSER_OPERATION_TIMEOUT_MS = 25_000;
 const DEFAULT_AGENT_BROWSER_PROCESS_TIMEOUT_MS = 35_000;
+const PROCESS_SIGKILL_GRACE_MS = 2_000;
+const PROCESS_FORCED_RESULT_GRACE_MS = 5_000;
 /** Grace period after `exit` before resolving when `close` is delayed by inherited stdio handles. */
 const EXIT_STDIO_GRACE_MS = 100;
+const WINDOWS_TASKKILL_TIMEOUT_MS = 2_000;
 const attachedBrowserSessionContext = new AsyncLocalStorage<boolean>();
+
+type SpawnAgentBrowserProcess = (
+	command: string,
+	args: string[],
+	options: { cwd: string; env: NodeJS.ProcessEnv; stdio: ["pipe", "pipe", "pipe"] },
+) => ChildProcessWithoutNullStreams;
+
+export interface ProcessTreeCleanupResult {
+	attempted: boolean;
+	error?: string;
+	exitCode?: number;
+	method: string;
+	pid: number;
+	stderr?: string;
+	stdout?: string;
+	timedOut?: boolean;
+}
 
 export function withAttachedBrowserSessionContext<T>(preserve: boolean, run: () => Promise<T>): Promise<T> {
 	return attachedBrowserSessionContext.run(preserve || attachedBrowserSessionContext.getStore() === true, run);
@@ -61,6 +81,9 @@ export interface ProcessRunResult {
 	/** True once the native agent-browser executable started. */
 	agentBrowserStarted: boolean;
 	exitCode: number;
+	forcedResult?: boolean;
+	forcedResultReason?: "abort" | "timeout";
+	processTreeCleanup?: ProcessTreeCleanupResult;
 	spawnError?: Error;
 	stderr: string;
 	stdout: string;
@@ -79,13 +102,44 @@ export function prepareAgentBrowserSpawnArgs(args: string[], wrapperCompatibilit
 	return ["--args", `--user-agent=${wrapperCompatibilityUserAgent.replaceAll(/[\r\n,]/g, "")}`, ...args];
 }
 
-function terminateSpawnedChild(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void {
-	if (processPlatform === "win32" && child.pid) {
-		const killer = spawn("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore" });
-		killer.on("error", () => undefined);
-		killer.unref();
-	}
-	child.kill(signal);
+function runWindowsTaskkill(pid: number): Promise<ProcessTreeCleanupResult> {
+	return new Promise((resolve) => {
+		let settled = false;
+		let timedOut = false;
+		let timer: NodeJS.Timeout | undefined;
+		const finish = (result: ProcessTreeCleanupResult) => {
+			if (settled) return;
+			settled = true;
+			if (timer) clearTimeout(timer);
+			resolve(result);
+		};
+		const killer = execFile("taskkill.exe", ["/PID", String(pid), "/T", "/F"], { windowsHide: true }, (error, stdout, stderr) => {
+			const errorCode = (error as NodeJS.ErrnoException | null)?.code;
+			const exitCode = typeof errorCode === "number" ? errorCode : error ? 1 : 0;
+			finish({
+				attempted: true,
+				error: error ? error.message : undefined,
+				exitCode,
+				method: "taskkill /PID <pid> /T /F",
+				pid,
+				stderr: stderr.trim() || undefined,
+				stdout: stdout.trim() || undefined,
+				timedOut: timedOut || undefined,
+			});
+		});
+		timer = setTimeout(() => {
+			timedOut = true;
+			killer.kill("SIGKILL");
+			finish({
+				attempted: true,
+				error: `taskkill.exe exceeded ${WINDOWS_TASKKILL_TIMEOUT_MS}ms`,
+				method: "taskkill /PID <pid> /T /F",
+				pid,
+				timedOut: true,
+			});
+		}, WINDOWS_TASKKILL_TIMEOUT_MS);
+		timer.unref?.();
+	});
 }
 
 /** Exported for unit tests that lock subprocess exit-code precedence. */
@@ -364,11 +418,17 @@ export async function runAgentBrowserProcess(options: {
 	args: string[];
 	cwd: string;
 	env?: NodeJS.ProcessEnv;
+	/** Testing seam for forced-settlement coverage; production callers use the default grace. */
+	forcedResultGraceMs?: number;
 	managedSessionRestoreState?: ManagedSessionRestoreState;
 	managedStateCurrentPageUrl?: string;
 	managedStatePageUrlUnknown?: boolean;
 	ownedManagedSession?: boolean;
+	/** Testing seam for platform-specific cleanup coverage; production callers use the current process platform. */
+	platform?: NodeJS.Platform;
 	preserveAttachedBrowserSession?: boolean;
+	/** Testing seam for subprocess lifecycle coverage; production callers use node:child_process.spawn. */
+	spawnProcess?: SpawnAgentBrowserProcess;
 	signal?: AbortSignal;
 	stdin?: string;
 	timeoutMs?: number;
@@ -379,6 +439,9 @@ export async function runAgentBrowserProcess(options: {
 	const ownedManagedSession = options.ownedManagedSession === true || isOwnedManagedSessionTarget(options.args);
 	const args = options.args;
 	const timeoutMs = options.timeoutMs ?? getAgentBrowserProcessTimeoutMs();
+	const forcedResultGraceMs = options.forcedResultGraceMs ?? PROCESS_FORCED_RESULT_GRACE_MS;
+	const platform = options.platform ?? processPlatform;
+	const spawnProcess = options.spawnProcess ?? spawn;
 	if (signal?.aborted) {
 		return { aborted: true, agentBrowserStarted: false, exitCode: 1, stderr: "", stdout: "", timedOut: false };
 	}
@@ -463,9 +526,12 @@ export async function runAgentBrowserProcess(options: {
 		let stdoutSpillError: Error | undefined;
 		let killTimer: NodeJS.Timeout | undefined;
 		let timeoutTimer: NodeJS.Timeout | undefined;
+		let forceSettleTimer: NodeJS.Timeout | undefined;
 		let abortListener: (() => void) | undefined;
 		let timedOut = false;
 		let completionWatcher: SpawnedChildCompletionWatcher | undefined;
+		let processTreeCleanup: ProcessTreeCleanupResult | undefined;
+		let pendingProcessTreeCleanup: Promise<void> | undefined;
 
 		const queueStdoutChunk = (buffer: Buffer) => {
 			stdoutTail = appendTail(stdoutTail, buffer.toString("utf8"), MAX_BUFFERED_STDOUT_TAIL_CHARS);
@@ -507,10 +573,10 @@ export async function runAgentBrowserProcess(options: {
 			abortListener = undefined;
 		};
 
-		const finish = (exitCode: number) => {
+		const finish = (exitCode: number, options: { forcedResult?: boolean; reason?: "abort" | "timeout" } = {}) => {
 			if (settled) return;
 			settled = true;
-			void pendingStdoutWrite.finally(async () => {
+			const finalize = async () => {
 				removeAbortListener();
 				if (killTimer) {
 					clearTimeout(killTimer);
@@ -518,7 +584,11 @@ export async function runAgentBrowserProcess(options: {
 				if (timeoutTimer) {
 					clearTimeout(timeoutTimer);
 				}
+				if (forceSettleTimer) {
+					clearTimeout(forceSettleTimer);
+				}
 				completionWatcher?.clear();
+				await pendingProcessTreeCleanup?.catch(() => undefined);
 				if (stdoutSpillHandle) {
 					await stdoutSpillHandle.close().catch(() => undefined);
 				}
@@ -531,6 +601,9 @@ export async function runAgentBrowserProcess(options: {
 					aborted,
 					agentBrowserStarted,
 					exitCode,
+					forcedResult: options.forcedResult || undefined,
+					forcedResultReason: options.reason,
+					processTreeCleanup,
 					spawnError,
 					stderr,
 					stdout: stdoutSpillPath ? stdoutTail : Buffer.concat(stdoutBuffers).toString("utf8"),
@@ -538,7 +611,12 @@ export async function runAgentBrowserProcess(options: {
 					timedOut,
 					timeoutMs: timedOut ? timeoutMs : undefined,
 				});
-			});
+			};
+			if (options.forcedResult) {
+				void finalize();
+			} else {
+				void pendingStdoutWrite.finally(finalize);
+			}
 		};
 
 		const spawnPolicyError = getManagedPreSpawnPolicyError(managedSessionRestoreOptions, managedStateCurrentPageUrl, managedStatePageUrlUnknown, trustedFirstBatchTabSelection);
@@ -546,7 +624,7 @@ export async function runAgentBrowserProcess(options: {
 			resolve({ aborted: false, agentBrowserStarted: false, exitCode: 1, spawnError: new Error(spawnPolicyError), stderr: "", stdout: "", timedOut: false });
 			return;
 		}
-		const child = spawn(
+		const child = spawnProcess(
 			agentBrowserCommand,
 			prepareAgentBrowserSpawnArgs(args, ownedManagedSessionCompatibilityEnv.AGENT_BROWSER_USER_AGENT, preserveAttachedBrowserSession),
 			{
@@ -560,6 +638,35 @@ export async function runAgentBrowserProcess(options: {
 			commitManagedSessionRestoreSuppression(managedSessionRestoreOptions);
 		});
 
+		const appendStderrDiagnostic = (message: string) => {
+			stderr = appendTail(stderr, `${stderr.length > 0 ? "\n" : ""}${message}\n`, MAX_BUFFERED_STDERR_CHARS);
+		};
+
+		const startWindowsProcessTreeCleanup = () => {
+			if (platform !== "win32" || child.pid === undefined || pendingProcessTreeCleanup) return;
+			processTreeCleanup = {
+				attempted: true,
+				method: "taskkill /PID <pid> /T /F",
+				pid: child.pid,
+			};
+			pendingProcessTreeCleanup = runWindowsTaskkill(child.pid).then((result) => {
+				processTreeCleanup = result;
+				if (result.error) {
+					appendStderrDiagnostic(`[pi-agent-browser] Windows process-tree cleanup warning: ${result.error}`);
+				}
+			});
+		};
+
+		const scheduleForcedResult = (reason: "abort" | "timeout") => {
+			if (forceSettleTimer) return;
+			forceSettleTimer = setTimeout(() => {
+				if (settled) return;
+				appendStderrDiagnostic(`[pi-agent-browser] Forced ${reason} result after the upstream process did not emit close within ${forcedResultGraceMs}ms of termination.`);
+				finish(reason === "timeout" ? 124 : 130, { forcedResult: true, reason });
+			}, forcedResultGraceMs);
+			forceSettleTimer.unref?.();
+		};
+
 		const terminateChild = (reason: "abort" | "timeout") => {
 			if (settled) return;
 			if (reason === "abort") {
@@ -567,10 +674,13 @@ export async function runAgentBrowserProcess(options: {
 			} else {
 				timedOut = true;
 			}
-			terminateSpawnedChild(child, "SIGTERM");
+			startWindowsProcessTreeCleanup();
+			child.kill("SIGTERM");
 			killTimer = setTimeout(() => {
-				terminateSpawnedChild(child, "SIGKILL");
-			}, 2_000);
+				child.kill("SIGKILL");
+			}, PROCESS_SIGKILL_GRACE_MS);
+			killTimer.unref?.();
+			scheduleForcedResult(reason);
 		};
 		const recordStdinError = (error: unknown) => {
 			const stdinError = error instanceof Error ? error : new Error(String(error));
