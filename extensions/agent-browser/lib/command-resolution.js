@@ -1,7 +1,7 @@
 /**
  * Purpose: Resolve the upstream agent-browser executable without invoking a shell.
- * Responsibilities: Preserve the plain command on non-Windows hosts, prefer real Windows .exe binaries on PATH, and unwrap npm/fnm .cmd shims that point at the current native agent-browser exe.
- * Scope: Command lookup only; process spawning, env curation, and result handling live in process.ts and doctor.mjs.
+ * Responsibilities: Preserve the plain command on non-Windows hosts, prefer real Windows .exe binaries on PATH, and unwrap narrow npm/fnm .cmd shims into direct spawn invocations.
+ * Scope: Command invocation lookup only; process spawning, env curation, and result handling live in process.ts and doctor.mjs.
  * Invariants/Assumptions: This package targets the current upstream agent-browser install layout and does not execute .cmd files through cmd.exe.
  */
 
@@ -11,6 +11,7 @@ import { env as processEnv, platform as processPlatform } from "node:process";
 
 const AGENT_BROWSER_COMMAND = "agent-browser";
 const WINDOWS_NATIVE_AGENT_BROWSER_EXE_PATTERN = /%~dp0([^"'\r\n]*agent-browser-win32-x64\.exe)/i;
+const WINDOWS_CMD_FORWARD_ARGS_TOKEN = "%*";
 
 async function defaultPathExists(path) {
 	try {
@@ -48,6 +49,47 @@ export function splitSearchPath(pathValue, platform = processPlatform) {
 		.filter(Boolean);
 }
 
+function isAbsoluteLikePath(path) {
+	return /^(?:[A-Za-z]:[\\/]|[\\/])/.test(String(path ?? ""));
+}
+
+function isPathLikeCmdShimToken(token) {
+	return /^%~dp0/i.test(String(token ?? "")) || isAbsoluteLikePath(token) || /[\\/]/.test(String(token ?? ""));
+}
+
+function resolveCmdShimPathToken(shimPath, token) {
+	const text = String(token ?? "");
+	if (/^%~dp0/i.test(text)) {
+		const relativePath = text.replace(/^%~dp0[\\/]*/i, "");
+		const targetSegments = relativePath.split(/[\\/]+/).filter(Boolean);
+		if (targetSegments.length === 0) return undefined;
+		return join(dirname(shimPath), ...targetSegments);
+	}
+	if (isAbsoluteLikePath(text)) return text;
+	const targetSegments = text.split(/[\\/]+/).filter(Boolean);
+	if (targetSegments.length === 0) return undefined;
+	return join(dirname(shimPath), ...targetSegments);
+}
+
+function getExecutableCmdLines(shimText) {
+	return String(shimText ?? "")
+		.split(/\r?\n/)
+		.map((line) => line.trim())
+		.filter((line) => line.length > 0)
+		.filter((line) => !/^@?echo\s+off\b/i.test(line));
+}
+
+function parseNodeForwardingCmdShim(shimText) {
+	const commandLines = getExecutableCmdLines(shimText);
+	if (commandLines.length !== 1) return undefined;
+	const match = /^@?"([^"]+)"\s+"([^"]+)"\s+%\*\s*$/i.exec(commandLines[0]);
+	if (!match) return undefined;
+	const [, command, script] = match;
+	const commandBasename = command.split(/[\\/]+/).filter(Boolean).pop()?.toLowerCase();
+	if (commandBasename !== "node.exe" && commandBasename !== "node") return undefined;
+	return { command, script };
+}
+
 export function resolveWindowsNpmCmdShimTargetPath(shimPath, shimText) {
 	const match = WINDOWS_NATIVE_AGENT_BROWSER_EXE_PATTERN.exec(String(shimText ?? ""));
 	if (!match) return undefined;
@@ -57,7 +99,18 @@ export function resolveWindowsNpmCmdShimTargetPath(shimPath, shimText) {
 	return join(dirname(shimPath), ...targetSegments);
 }
 
-export async function resolveAgentBrowserCommand(options = {}) {
+async function resolveWindowsNodeCmdShimInvocation(shimPath, shimText, options = {}) {
+	const parsed = parseNodeForwardingCmdShim(shimText);
+	if (!parsed) return undefined;
+	const pathExists = options.pathExists ?? defaultPathExists;
+	const scriptPath = resolveCmdShimPathToken(shimPath, parsed.script);
+	if (!scriptPath || !(await pathExists(scriptPath))) return undefined;
+	const command = isPathLikeCmdShimToken(parsed.command) ? resolveCmdShimPathToken(shimPath, parsed.command) : parsed.command;
+	if (!command || (isPathLikeCmdShimToken(parsed.command) && !(await pathExists(command)))) return undefined;
+	return { argsPrefix: [scriptPath], command, resolution: "node-cmd-shim", shimPath };
+}
+
+export async function resolveAgentBrowserInvocation(options = {}) {
 	const platform = options.platform ?? processPlatform;
 	const commandName = options.commandName ?? AGENT_BROWSER_COMMAND;
 	if (platform !== "win32") {
@@ -89,6 +142,8 @@ export async function resolveAgentBrowserCommand(options = {}) {
 		if (targetPath && (await pathExists(targetPath))) {
 			return { command: targetPath, resolution: "npm-cmd-shim", shimPath: cmdPath };
 		}
+		const nodeInvocation = await resolveWindowsNodeCmdShimInvocation(cmdPath, shimText, { pathExists });
+		if (nodeInvocation) return nodeInvocation;
 	}
 
 	return { command: commandName, resolution: "fallback" };

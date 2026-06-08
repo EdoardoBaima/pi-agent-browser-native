@@ -15,7 +15,7 @@ import { delimiter, dirname, join, win32 } from "node:path";
 import { PassThrough } from "node:stream";
 import test from "node:test";
 
-import { resolveAgentBrowserCommand } from "../extensions/agent-browser/lib/command-resolution.js";
+import { resolveAgentBrowserInvocation } from "../extensions/agent-browser/lib/command-resolution.js";
 import {
 	buildOwnedManagedSessionRestoreContext,
 	createManagedSessionRestoreKey,
@@ -94,8 +94,8 @@ test("resolveSpawnedChildExitCode prefers close, then timeout, then exit fallbac
 	);
 });
 
-test("resolveAgentBrowserCommand keeps the plain command outside Windows", async () => {
-	const resolved = await resolveAgentBrowserCommand({
+test("resolveAgentBrowserInvocation keeps the plain command outside Windows", async () => {
+	const resolved = await resolveAgentBrowserInvocation({
 		env: { PATH: "/tmp/agent-browser-bin" },
 		platform: "linux",
 	});
@@ -104,7 +104,7 @@ test("resolveAgentBrowserCommand keeps the plain command outside Windows", async
 	assert.equal(resolved.resolution, "fallback");
 });
 
-test("resolveAgentBrowserCommand prefers Windows agent-browser.exe before npm cmd shims", async () => {
+test("resolveAgentBrowserInvocation prefers Windows agent-browser.exe before npm cmd shims", async () => {
 	const tempDir = await mkdtemp(join(tmpdir(), "pi-agent-browser-resolve-"));
 	const cmdDir = join(tempDir, "cmd-bin");
 	const exeDir = join(tempDir, "exe-bin");
@@ -118,7 +118,7 @@ test("resolveAgentBrowserCommand prefers Windows agent-browser.exe before npm cm
 		await writeFile(join(cmdDir, "agent-browser.cmd"), '@"%~dp0\\\\node_modules\\\\agent-browser\\\\bin\\\\agent-browser-win32-x64.exe" %*\n', "utf8");
 		await writeFile(exePath, "native exe", "utf8");
 
-		const resolved = await resolveAgentBrowserCommand({
+		const resolved = await resolveAgentBrowserInvocation({
 			env: { PATH: `${cmdDir};${exeDir}` },
 			platform: "win32",
 		});
@@ -130,7 +130,7 @@ test("resolveAgentBrowserCommand prefers Windows agent-browser.exe before npm cm
 	}
 });
 
-test("resolveAgentBrowserCommand resolves Windows npm cmd shims to the native agent-browser exe", async () => {
+test("resolveAgentBrowserInvocation resolves Windows npm cmd shims to the native agent-browser exe", async () => {
 	const tempDir = await mkdtemp(join(tmpdir(), "pi-agent-browser-resolve-"));
 	const shimTarget = join(tempDir, "node_modules", "agent-browser", "bin", "agent-browser-win32-x64.exe");
 
@@ -139,7 +139,7 @@ test("resolveAgentBrowserCommand resolves Windows npm cmd shims to the native ag
 		await writeFile(shimTarget, "native shim target", "utf8");
 		await writeFile(join(tempDir, "agent-browser.cmd"), '@"%~dp0\\\\node_modules\\\\agent-browser\\\\bin\\\\agent-browser-win32-x64.exe" %*\n', "utf8");
 
-		const resolved = await resolveAgentBrowserCommand({
+		const resolved = await resolveAgentBrowserInvocation({
 			env: { Path: tempDir },
 			platform: "win32",
 		});
@@ -152,13 +152,13 @@ test("resolveAgentBrowserCommand resolves Windows npm cmd shims to the native ag
 	}
 });
 
-test("resolveAgentBrowserCommand falls back when Windows npm cmd shims cannot be resolved", async () => {
+test("resolveAgentBrowserInvocation falls back when Windows npm cmd shims cannot be resolved", async () => {
 	const tempDir = await mkdtemp(join(tmpdir(), "pi-agent-browser-resolve-"));
 
 	try {
 		await writeFile(join(tempDir, "agent-browser.cmd"), "@echo custom shim\n", "utf8");
 
-		const resolved = await resolveAgentBrowserCommand({
+		const resolved = await resolveAgentBrowserInvocation({
 			env: { PATH: tempDir },
 			platform: "win32",
 		});
@@ -249,6 +249,59 @@ test("process start identity commands use absolute POSIX fallbacks and native Po
 	assert.equal(processStartIdentitiesMatch("win32-powershell-ticks-v1:1", "win32-powershell-ticks-v1:2"), false);
 });
 
+test("resolveAgentBrowserInvocation unwraps Windows node cmd shims to an invocation prefix", async () => {
+	const tempDir = await mkdtemp(join(tmpdir(), "pi-agent-browser-resolve-node-shim-"));
+	const scriptPath = join(tempDir, "agent-browser-fake.cjs");
+
+	try {
+		await writeFile(scriptPath, "process.exit(0);\n", "utf8");
+		await writeFile(join(tempDir, "agent-browser.cmd"), `@ECHO OFF\r\n"${process.execPath}" "${scriptPath}" %*\r\n`, "utf8");
+
+		const resolved = await resolveAgentBrowserInvocation({
+			env: { PATH: tempDir },
+			platform: "win32",
+		});
+
+		assert.equal(resolved.command, process.execPath);
+		assert.deepEqual(resolved.argsPrefix, [scriptPath]);
+		assert.equal(resolved.resolution, "node-cmd-shim");
+		assert.equal(resolved.shimPath, join(tempDir, "agent-browser.cmd"));
+	} finally {
+		await rm(tempDir, { force: true, maxRetries: 5, recursive: true, retryDelay: 100 });
+	}
+});
+
+test("resolveAgentBrowserInvocation rejects unsupported Windows node cmd shim shapes", async () => {
+	const cases = [
+		{ name: "extra executable line", shim: (scriptPath: string) => `@ECHO OFF\r\n"${process.execPath}" "${scriptPath}" %*\r\necho done\r\n`, writeScript: true },
+		{ name: "call prefix", shim: (scriptPath: string) => `call "${process.execPath}" "${scriptPath}" %*\r\n`, writeScript: true },
+		{ name: "missing forwarded args", shim: (scriptPath: string) => `"${process.execPath}" "${scriptPath}"\r\n`, writeScript: true },
+		{ name: "extra trailing token", shim: (scriptPath: string) => `"${process.execPath}" "${scriptPath}" %* --extra\r\n`, writeScript: true },
+		{ name: "unquoted script", shim: (scriptPath: string) => `"${process.execPath}" ${scriptPath} %*\r\n`, writeScript: true },
+		{ name: "missing script file", shim: (scriptPath: string) => `"${process.execPath}" "${scriptPath}" %*\r\n`, writeScript: false },
+	] as const;
+
+	for (const testCase of cases) {
+		const tempDir = await mkdtemp(join(tmpdir(), "pi-agent-browser-reject-node-shim-"));
+		const scriptPath = join(tempDir, "agent-browser-fake.cjs");
+		try {
+			if (testCase.writeScript) await writeFile(scriptPath, "process.exit(0);\n", "utf8");
+			await writeFile(join(tempDir, "agent-browser.cmd"), testCase.shim(scriptPath), "utf8");
+
+			const resolved = await resolveAgentBrowserInvocation({
+				env: { PATH: tempDir },
+				platform: "win32",
+			});
+
+			assert.equal(resolved.command, "agent-browser", testCase.name);
+			assert.equal(resolved.resolution, "fallback", testCase.name);
+			assert.equal(resolved.argsPrefix, undefined, testCase.name);
+		} finally {
+			await rm(tempDir, { force: true, maxRetries: 5, recursive: true, retryDelay: 100 });
+		}
+	}
+});
+
 test("writeFakeAgentBrowserBinary installs Windows cmd launcher when platform is win32", async () => {
 	const tempDir = await mkdtemp(join(tmpdir(), "pi-agent-browser-win32-launcher-"));
 
@@ -274,7 +327,32 @@ test("writeFakeAgentBrowserBinary installs Windows cmd launcher when platform is
 	}
 });
 
-test("process helpers clamp the upstream default operation timeout to the documented baseline", () => {
+test("runAgentBrowserProcess unwraps Windows node cmd shims into spawn args without a shell", async () => {
+	const tempDir = await mkdtemp(join(tmpdir(), "pi-agent-browser-win32-node-shim-"));
+
+	try {
+		await writeFakeAgentBrowserBinary(
+			tempDir,
+			`process.stdout.write(JSON.stringify({ success: true, data: { argv: process.argv.slice(2) } }));`,
+			"win32",
+		);
+
+		const processResult = await runAgentBrowserProcess({
+			args: ["snapshot", "--compact"],
+			cwd: tempDir,
+			env: { PATH: tempDir },
+			platform: "win32",
+		});
+
+		assert.equal(processResult.exitCode, 0);
+		assert.equal(processResult.spawnError, undefined);
+		assert.match(processResult.stdout, /"argv":\["snapshot","--compact"\]/);
+	} finally {
+		await rm(tempDir, { force: true, maxRetries: 5, recursive: true, retryDelay: 100 });
+	}
+});
+
+test("process helpers clamp upstream operation timeouts below the CLI IPC read timeout", () => {
 	assert.equal(getAgentBrowserProcessTimeoutMs({ PI_AGENT_BROWSER_PROCESS_TIMEOUT_MS: "1234" }), 1234);
 	assert.equal(getAgentBrowserProcessTimeoutMs({ PI_AGENT_BROWSER_PROCESS_TIMEOUT_MS: "invalid" }), 35_000);
 
@@ -675,13 +753,8 @@ test("runAgentBrowserProcess removes abort listeners after spawn errors", async 
 			signal: controller.signal,
 		});
 
-		if (process.platform === "win32") {
-			assert.equal(processResult.exitCode, 1);
-			assert.match(processResult.stderr, /agent-browser|not recognized/);
-		} else {
-			assert.equal(processResult.exitCode, 127);
-			assert.match(processResult.spawnError?.message ?? "", /ENOENT|agent-browser/);
-		}
+		assert.equal(processResult.exitCode, 127);
+		assert.match(processResult.spawnError?.message ?? "", /ENOENT|agent-browser/);
 		assert.equal(processResult.aborted, false);
 		assert.equal(processResult.agentBrowserStarted, false);
 		assert.equal(getEventListeners(controller.signal, "abort").length, 0);
@@ -1267,7 +1340,7 @@ process.stdout.write(JSON.stringify(envelope));`,
 				assert.equal(data.lang, "en_US.UTF-8");
 				assert.equal(data.openaiApiKey, "openai-should-not-leak");
 				assert.equal(data.secret, "should-not-leak");
-				assert.equal(data.socketDir, getAgentBrowserSocketDir());
+				assert.equal(data.socketDir, getAgentBrowserSocketDir() ?? null);
 				if (data.socketDir) {
 					assert.equal((await stat(data.socketDir)).isDirectory(), true);
 				}

@@ -1,12 +1,13 @@
-export type AgentBrowserCommandResolutionKind = "fallback" | "path-exe" | "npm-cmd-shim";
+export type AgentBrowserInvocationResolutionKind = "fallback" | "path-exe" | "npm-cmd-shim" | "node-cmd-shim";
 
-export interface AgentBrowserCommandResolution {
+export interface AgentBrowserInvocationResolution {
+	argsPrefix?: string[];
 	command: string;
-	resolution: AgentBrowserCommandResolutionKind;
+	resolution: AgentBrowserInvocationResolutionKind;
 	shimPath?: string;
 }
 
-export interface ResolveAgentBrowserCommandOptions {
+export interface ResolveAgentBrowserInvocationOptions {
 	commandName?: string;
 	env?: NodeJS.ProcessEnv | Record<string, string | undefined>;
 	pathExists?: (path: string) => boolean | Promise<boolean>;
@@ -18,4 +19,4 @@ export interface ResolveAgentBrowserCommandOptions {
 export function getSearchPathValue(env?: NodeJS.ProcessEnv | Record<string, string | undefined>): string;
 export function splitSearchPath(pathValue?: string, platform?: NodeJS.Platform): string[];
 export function resolveWindowsNpmCmdShimTargetPath(shimPath: string, shimText: string): string | undefined;
-export function resolveAgentBrowserCommand(options?: ResolveAgentBrowserCommandOptions): Promise<AgentBrowserCommandResolution>;
+export function resolveAgentBrowserInvocation(options?: ResolveAgentBrowserInvocationOptions): Promise<AgentBrowserInvocationResolution>;

@@ -15,7 +15,7 @@ import { dirname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
-import { resolveAgentBrowserCommand } from "../extensions/agent-browser/lib/command-resolution.js";
+import { resolveAgentBrowserInvocation } from "../extensions/agent-browser/lib/command-resolution.js";
 import { CAPABILITY_BASELINE_SOURCE } from "./agent-browser-capability-baseline.mjs";
 import { MINIMUM_AGENT_BROWSER_VERSION, TARGET_AGENT_BROWSER_SOURCE, TARGET_AGENT_BROWSER_VERSION, isSupportedAgentBrowserVersion } from "./agent-browser-target.mjs";
 
@@ -125,8 +125,8 @@ export function parseCliArgs(argv = process.argv.slice(2)) {
 }
 
 async function defaultRunAgentBrowser(args) {
-	const resolvedCommand = await resolveAgentBrowserCommand();
-	const { stdout, stderr } = await execFile(resolvedCommand.command, args, { maxBuffer: 1024 * 1024 });
+	const resolvedInvocation = await resolveAgentBrowserInvocation();
+	const { stdout, stderr } = await execFile(resolvedInvocation.command, [...(resolvedInvocation.argsPrefix ?? []), ...args], { maxBuffer: 1024 * 1024 });
 	return `${stdout}${stderr}`;
 }
 

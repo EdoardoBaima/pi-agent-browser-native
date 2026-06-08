@@ -6,7 +6,7 @@ import { env as processEnv, platform as processPlatform } from "node:process";
 
 import { parseArgvDescriptor } from "./argv-descriptor.js";
 import { extractExplicitSessionName, resolveAgentBrowserNamespace } from "./argv-grammar.js";
-import { resolveAgentBrowserCommand } from "./command-resolution.js";
+import { resolveAgentBrowserInvocation } from "./command-resolution.js";
 import {
 	commitManagedSessionRestoreSuppression,
 	getManagedSessionRestoreEnv,
@@ -424,7 +424,7 @@ export async function runAgentBrowserProcess(options: {
 	managedStateCurrentPageUrl?: string;
 	managedStatePageUrlUnknown?: boolean;
 	ownedManagedSession?: boolean;
-	/** Testing seam for platform-specific cleanup coverage; production callers use the current process platform. */
+	/** Testing seam for platform-specific command resolution and cleanup coverage; production callers use the current process platform. */
 	platform?: NodeJS.Platform;
 	preserveAttachedBrowserSession?: boolean;
 	/** Testing seam for subprocess lifecycle coverage; production callers use node:child_process.spawn. */
@@ -506,7 +506,7 @@ export async function runAgentBrowserProcess(options: {
 		return { aborted: true, agentBrowserStarted: false, exitCode: 1, stderr: "", stdout: "", timedOut: false };
 	}
 	const childEnv = buildAgentBrowserProcessEnv(parentEnv, effectiveEnv);
-	const agentBrowserCommand = (await resolveAgentBrowserCommand({ env: childEnv })).command;
+	const agentBrowserInvocation = await resolveAgentBrowserInvocation({ env: childEnv, platform });
 	if (signal?.aborted) {
 		return { aborted: true, agentBrowserStarted: false, exitCode: 1, stderr: "", stdout: "", timedOut: false };
 	}
@@ -624,15 +624,15 @@ export async function runAgentBrowserProcess(options: {
 			resolve({ aborted: false, agentBrowserStarted: false, exitCode: 1, spawnError: new Error(spawnPolicyError), stderr: "", stdout: "", timedOut: false });
 			return;
 		}
-		const child = spawnProcess(
-			agentBrowserCommand,
-			prepareAgentBrowserSpawnArgs(args, ownedManagedSessionCompatibilityEnv.AGENT_BROWSER_USER_AGENT, preserveAttachedBrowserSession),
-			{
-				cwd,
-				env: childEnv,
-				stdio: ["pipe", "pipe", "pipe"],
-			},
-		);
+		const processArgs = [
+			...(agentBrowserInvocation.argsPrefix ?? []),
+			...prepareAgentBrowserSpawnArgs(args, ownedManagedSessionCompatibilityEnv.AGENT_BROWSER_USER_AGENT, preserveAttachedBrowserSession),
+		];
+		const child = spawnProcess(agentBrowserInvocation.command, processArgs, {
+			cwd,
+			env: childEnv,
+			stdio: ["pipe", "pipe", "pipe"],
+		});
 		child.once("spawn", () => {
 			agentBrowserStarted = true;
 			commitManagedSessionRestoreSuppression(managedSessionRestoreOptions);
