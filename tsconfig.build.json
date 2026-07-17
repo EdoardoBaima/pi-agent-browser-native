@@ -10,6 +10,7 @@
   },
   "include": [
     "extensions/**/*.ts",
+    "extensions/agent-browser/lib/command-resolution.js",
     "extensions/agent-browser/lib/config-policy.js"
   ],
   "exclude": [

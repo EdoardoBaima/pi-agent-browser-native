@@ -16,6 +16,7 @@
   "include": [
     ".pi/extensions/**/*.ts",
     "extensions/**/*.ts",
+    "extensions/agent-browser/lib/command-resolution.js",
     "extensions/agent-browser/lib/config-policy.js",
     "test/**/*.ts"
   ]

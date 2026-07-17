@@ -27,10 +27,13 @@ test("package lock excludes WorkOS URLs", () => {
 	assert.doesNotMatch(readFileSync("package-lock.json", "utf8"), /(?:[a-z][a-z0-9+.-]*:)?\/\/[^\s\"]*(?:workos|socket-firewall)/i);
 });
 
-test("typecheck gate covers shared JavaScript config policy implementation", () => {
+test("typecheck and build gates cover shared JavaScript runtime modules", () => {
 	const tsconfig = JSON.parse(readFileSync("tsconfig.json", "utf8")) as { compilerOptions?: { allowJs?: boolean; noUnusedLocals?: boolean }; include?: string[] };
+	const buildTsconfig = JSON.parse(readFileSync("tsconfig.build.json", "utf8")) as { include?: string[] };
 	assert.equal(tsconfig.compilerOptions?.allowJs, true);
 	assert.equal(tsconfig.compilerOptions?.noUnusedLocals, true);
+	assert.ok(tsconfig.include?.includes("extensions/agent-browser/lib/command-resolution.js"));
+	assert.ok(buildTsconfig.include?.includes("extensions/agent-browser/lib/command-resolution.js"));
 	assert.ok(tsconfig.include?.includes("extensions/agent-browser/lib/config-policy.js"));
 	assert.equal(existsSync("extensions/agent-browser/lib/config-policy.d.ts"), false);
 });
