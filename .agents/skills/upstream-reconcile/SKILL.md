@@ -36,6 +36,14 @@ chezmoi source-path
 
 Inspect the installed clone reported by `pi list` with `git -C <path> rev-parse HEAD`. Compare the live `~/.pi/agent/settings.json` entry with `dot_pi/agent/settings.json.tmpl` under `chezmoi source-path`. The chezmoi template is the durable source; the live settings file is rendered state.
 
+Keep Pi's three states distinct:
+
+- The configured source names GitHub `origin` and a moving branch; BYCO is only a mirror.
+- The managed clone stays at its last-fetched commit until `pi update --extension` runs.
+- The running Pi process stays on its loaded code until `/reload` or restart.
+
+A push changes the remote branch only. Verify all three states instead of treating a successful push as an installed update.
+
 A dirty worktree permits an audit but pauses rebases, source changes, and pushes. Forgejo being unreachable permits the GitHub audit but leaves the mirror incomplete.
 
 *Complete when the upstream, branch, `origin`, `byco`, configured package source, and installed checkout are each identified by URL or exact commit.*
