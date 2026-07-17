@@ -93,9 +93,9 @@ git push --force-with-lease byco HEAD:"$branch"
 pi update --extension "git:github.com/EdoardoBaima/pi-agent-browser-native@$branch"
 ```
 
-Use the configured package identity from `pi list` if it differs. `pi update --extension` fetches the configured branch and resets Pi's managed clone to that branch tip. Delete the local backup after the reloaded runtime passes step 4.
+Use the configured package identity from `pi list` if it differs. On native Windows, first run `git -C "<installed-path-from-pi-list>" config core.longpaths true`; Pi cleans generated dependency trees during updates, and current npm packages can exceed the legacy Windows path limit. `pi update --extension` then fetches the configured branch, resets the managed clone, cleans it, installs dependencies, and builds `dist`. Delete the local backup after the reloaded runtime passes step 4.
 
-*Complete when `upstream/main` is an ancestor of the branch; `origin/$branch`, `byco/$branch`, and the installed clone equal `HEAD`; required checks pass; both main mirrors equal `upstream/main`.*
+*Complete when `upstream/main` is an ancestor of the branch; `origin/$branch`, `byco/$branch`, and the installed clone equal `HEAD`; the installed compiled entrypoint exists; required checks pass; both main mirrors equal `upstream/main`.*
 
 ## 3B. Retire the fork install
 
