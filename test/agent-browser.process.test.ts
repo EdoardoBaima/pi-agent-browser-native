@@ -36,6 +36,7 @@ import {
 	prepareAgentBrowserSpawnArgs,
 	resolveSpawnedChildExitCode,
 	runAgentBrowserProcess,
+	runWindowsTaskkill,
 } from "../extensions/agent-browser/lib/process.js";
 import { parseAgentBrowserEnvelope } from "../extensions/agent-browser/lib/results/envelope.js";
 import {
@@ -529,12 +530,11 @@ test("runAgentBrowserProcess stops a hung upstream client at the wrapper watchdo
 	}
 });
 
-test("runAgentBrowserProcess returns a forced timeout result when upstream never emits close", async () => {
-	const tempDir = await mkdtemp(join(tmpdir(), "pi-agent-browser-forced-result-"));
+function createNeverClosingChild(pid = 12345): { child: ChildProcessWithoutNullStreams; killSignals: string[] } {
 	const processEvents = new EventEmitter();
 	const killSignals: string[] = [];
-	const fakeChild = {
-		pid: 12345,
+	const child = {
+		pid,
 		stdin: new PassThrough(),
 		stdout: new PassThrough(),
 		stderr: new PassThrough(),
@@ -544,15 +544,65 @@ test("runAgentBrowserProcess returns a forced timeout result when upstream never
 		},
 		once: processEvents.once.bind(processEvents),
 	} as unknown as ChildProcessWithoutNullStreams;
+	return { child, killSignals };
+}
+
+test("runWindowsTaskkill bounds a cleanup process that never completes", async () => {
+	const killSignals: string[] = [];
+	const startedAt = Date.now();
+	const result = await runWindowsTaskkill(43210, {
+		execFileProcess: () => ({
+			kill(signal?: NodeJS.Signals | number) {
+				killSignals.push(String(signal));
+				return true;
+			},
+		}),
+		timeoutMs: 10,
+	});
+
+	assert.equal(result.attempted, true);
+	assert.equal(result.pid, 43210);
+	assert.equal(result.method, "taskkill /PID <pid> /T /F");
+	assert.equal(result.timedOut, true);
+	assert.match(result.error ?? "", /exceeded 10ms/);
+	assert.deepEqual(killSignals, ["SIGKILL"]);
+	assert.ok(Date.now() - startedAt < 1_000);
+});
+
+test("runWindowsTaskkill does not arm its timeout after synchronous completion", async () => {
+	const killSignals: string[] = [];
+	const result = await runWindowsTaskkill(54321, {
+		execFileProcess: (_command, _args, _options, callback) => {
+			callback(null, "cleanup complete", "");
+			return {
+				kill(signal?: NodeJS.Signals | number) {
+					killSignals.push(String(signal));
+					return true;
+				},
+			};
+		},
+		timeoutMs: 10,
+	});
+	await new Promise((resolve) => setTimeout(resolve, 25));
+
+	assert.equal(result.exitCode, 0);
+	assert.equal(result.timedOut, undefined);
+	assert.equal(result.stdout, "cleanup complete");
+	assert.deepEqual(killSignals, []);
+});
+
+test("runAgentBrowserProcess returns a forced timeout result when upstream never emits close", async () => {
+	const tempDir = await mkdtemp(join(tmpdir(), "pi-agent-browser-forced-timeout-"));
+	const { child, killSignals } = createNeverClosingChild();
 
 	try {
 		const startedAt = Date.now();
 		const processResult = await runAgentBrowserProcess({
-			args: ["open", "about:blank"],
+			args: ["--version"],
 			cwd: tempDir,
 			forcedResultGraceMs: 50,
 			platform: "linux",
-			spawnProcess: () => fakeChild,
+			spawnProcess: () => child,
 			timeoutMs: 10,
 		});
 
@@ -565,6 +615,62 @@ test("runAgentBrowserProcess returns a forced timeout result when upstream never
 		assert.equal(processResult.processTreeCleanup, undefined);
 		assert.match(processResult.stderr, /Forced timeout result/);
 		assert.deepEqual(killSignals, ["SIGTERM"]);
+		assert.ok(Date.now() - startedAt < 1_000);
+	} finally {
+		await rm(tempDir, { force: true, maxRetries: 5, recursive: true, retryDelay: 100 });
+	}
+});
+
+test("runAgentBrowserProcess returns a forced abort result when upstream never emits close", async () => {
+	const tempDir = await mkdtemp(join(tmpdir(), "pi-agent-browser-forced-abort-"));
+	const controller = new AbortController();
+	const { child, killSignals } = createNeverClosingChild();
+
+	try {
+		const startedAt = Date.now();
+		const cleanupPids: number[] = [];
+		const resultPromise = runAgentBrowserProcess({
+			args: ["--version"],
+			cwd: tempDir,
+			env: { PATH: "" },
+			forcedResultGraceMs: 50,
+			platform: "win32",
+			signal: controller.signal,
+			spawnProcess: () => {
+				setImmediate(() => controller.abort());
+				return child;
+			},
+			timeoutMs: 25,
+			windowsTaskkill: async (pid) => {
+				cleanupPids.push(pid);
+				return {
+					attempted: true,
+					error: "simulated cleanup warning",
+					exitCode: 1,
+					method: "taskkill /PID <pid> /T /F",
+					pid,
+				};
+			},
+		});
+		const processResult = await resultPromise;
+
+		assert.equal(processResult.timedOut, false);
+		assert.equal(processResult.aborted, true);
+		assert.equal(processResult.exitCode, 130);
+		assert.equal(processResult.forcedResult, true);
+		assert.equal(processResult.forcedResultReason, "abort");
+		assert.deepEqual(processResult.processTreeCleanup, {
+			attempted: true,
+			error: "simulated cleanup warning",
+			exitCode: 1,
+			method: "taskkill /PID <pid> /T /F",
+			pid: 12345,
+		});
+		assert.match(processResult.stderr, /Windows process-tree cleanup warning: simulated cleanup warning/);
+		assert.match(processResult.stderr, /Forced abort result/);
+		assert.deepEqual(cleanupPids, [12345]);
+		assert.deepEqual(killSignals, ["SIGTERM"]);
+		assert.equal(getEventListeners(controller.signal, "abort").length, 0);
 		assert.ok(Date.now() - startedAt < 1_000);
 	} finally {
 		await rm(tempDir, { force: true, maxRetries: 5, recursive: true, retryDelay: 100 });

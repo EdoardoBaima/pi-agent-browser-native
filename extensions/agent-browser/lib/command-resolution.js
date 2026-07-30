@@ -11,7 +11,6 @@ import { env as processEnv, platform as processPlatform } from "node:process";
 
 const AGENT_BROWSER_COMMAND = "agent-browser";
 const WINDOWS_NATIVE_AGENT_BROWSER_EXE_PATTERN = /%~dp0([^"'\r\n]*agent-browser-win32-x64\.exe)/i;
-const WINDOWS_CMD_FORWARD_ARGS_TOKEN = "%*";
 
 async function defaultPathExists(path) {
 	try {

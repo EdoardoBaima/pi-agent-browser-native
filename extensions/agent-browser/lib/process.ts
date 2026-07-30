@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { execFile, type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { execFile, type ChildProcessWithoutNullStreams, type ExecFileException, spawn } from "node:child_process";
 import { lstat, mkdir, readdir } from "node:fs/promises";
 import { dirname, isAbsolute, join } from "node:path";
 import { env as processEnv, platform as processPlatform } from "node:process";
@@ -50,6 +50,17 @@ type SpawnAgentBrowserProcess = (
 	args: string[],
 	options: { cwd: string; env: NodeJS.ProcessEnv; stdio: ["pipe", "pipe", "pipe"] },
 ) => ChildProcessWithoutNullStreams;
+
+type WindowsTaskkillProcess = {
+	kill: (signal?: NodeJS.Signals | number) => boolean;
+};
+
+type ExecuteWindowsTaskkill = (
+	command: string,
+	args: string[],
+	options: { windowsHide: true },
+	callback: (error: ExecFileException | null, stdout: string, stderr: string) => void,
+) => WindowsTaskkillProcess;
 
 export interface ProcessTreeCleanupResult {
 	attempted: boolean;
@@ -102,7 +113,15 @@ export function prepareAgentBrowserSpawnArgs(args: string[], wrapperCompatibilit
 	return ["--args", `--user-agent=${wrapperCompatibilityUserAgent.replaceAll(/[\r\n,]/g, "")}`, ...args];
 }
 
-function runWindowsTaskkill(pid: number): Promise<ProcessTreeCleanupResult> {
+/** Run Windows process-tree cleanup without letting a stuck `taskkill.exe` block the tool result. */
+export function runWindowsTaskkill(
+	pid: number,
+	options: { execFileProcess?: ExecuteWindowsTaskkill; timeoutMs?: number } = {},
+): Promise<ProcessTreeCleanupResult> {
+	const timeoutMs = options.timeoutMs ?? WINDOWS_TASKKILL_TIMEOUT_MS;
+	const execFileProcess: ExecuteWindowsTaskkill =
+		options.execFileProcess ??
+		((command, args, execOptions, callback) => execFile(command, args, { ...execOptions, encoding: "utf8" }, callback));
 	return new Promise((resolve) => {
 		let settled = false;
 		let timedOut = false;
@@ -113,8 +132,8 @@ function runWindowsTaskkill(pid: number): Promise<ProcessTreeCleanupResult> {
 			if (timer) clearTimeout(timer);
 			resolve(result);
 		};
-		const killer = execFile("taskkill.exe", ["/PID", String(pid), "/T", "/F"], { windowsHide: true }, (error, stdout, stderr) => {
-			const errorCode = (error as NodeJS.ErrnoException | null)?.code;
+		const killer = execFileProcess("taskkill.exe", ["/PID", String(pid), "/T", "/F"], { windowsHide: true }, (error, stdout, stderr) => {
+			const errorCode = error?.code;
 			const exitCode = typeof errorCode === "number" ? errorCode : error ? 1 : 0;
 			finish({
 				attempted: true,
@@ -127,17 +146,18 @@ function runWindowsTaskkill(pid: number): Promise<ProcessTreeCleanupResult> {
 				timedOut: timedOut || undefined,
 			});
 		});
+		if (settled) return;
 		timer = setTimeout(() => {
 			timedOut = true;
 			killer.kill("SIGKILL");
 			finish({
 				attempted: true,
-				error: `taskkill.exe exceeded ${WINDOWS_TASKKILL_TIMEOUT_MS}ms`,
+				error: `taskkill.exe exceeded ${timeoutMs}ms`,
 				method: "taskkill /PID <pid> /T /F",
 				pid,
 				timedOut: true,
 			});
-		}, WINDOWS_TASKKILL_TIMEOUT_MS);
+		}, timeoutMs);
 		timer.unref?.();
 	});
 }
@@ -430,6 +450,8 @@ export async function runAgentBrowserProcess(options: {
 	/** Testing seam for subprocess lifecycle coverage; production callers use node:child_process.spawn. */
 	spawnProcess?: SpawnAgentBrowserProcess;
 	signal?: AbortSignal;
+	/** Testing seam for Windows cleanup wiring; production callers use the bounded taskkill runner. */
+	windowsTaskkill?: (pid: number) => Promise<ProcessTreeCleanupResult>;
 	stdin?: string;
 	timeoutMs?: number;
 	trustedFirstBatchTabSelection?: boolean;
@@ -442,6 +464,7 @@ export async function runAgentBrowserProcess(options: {
 	const forcedResultGraceMs = options.forcedResultGraceMs ?? PROCESS_FORCED_RESULT_GRACE_MS;
 	const platform = options.platform ?? processPlatform;
 	const spawnProcess = options.spawnProcess ?? spawn;
+	const windowsTaskkill = options.windowsTaskkill ?? runWindowsTaskkill;
 	if (signal?.aborted) {
 		return { aborted: true, agentBrowserStarted: false, exitCode: 1, stderr: "", stdout: "", timedOut: false };
 	}
@@ -529,6 +552,7 @@ export async function runAgentBrowserProcess(options: {
 		let forceSettleTimer: NodeJS.Timeout | undefined;
 		let abortListener: (() => void) | undefined;
 		let timedOut = false;
+		let terminationReason: "abort" | "timeout" | undefined;
 		let completionWatcher: SpawnedChildCompletionWatcher | undefined;
 		let processTreeCleanup: ProcessTreeCleanupResult | undefined;
 		let pendingProcessTreeCleanup: Promise<void> | undefined;
@@ -649,7 +673,7 @@ export async function runAgentBrowserProcess(options: {
 				method: "taskkill /PID <pid> /T /F",
 				pid: child.pid,
 			};
-			pendingProcessTreeCleanup = runWindowsTaskkill(child.pid).then((result) => {
+			pendingProcessTreeCleanup = windowsTaskkill(child.pid).then((result) => {
 				processTreeCleanup = result;
 				if (result.error) {
 					appendStderrDiagnostic(`[pi-agent-browser] Windows process-tree cleanup warning: ${result.error}`);
@@ -668,9 +692,14 @@ export async function runAgentBrowserProcess(options: {
 		};
 
 		const terminateChild = (reason: "abort" | "timeout") => {
-			if (settled) return;
+			if (settled || terminationReason) return;
+			terminationReason = reason;
 			if (reason === "abort") {
 				aborted = true;
+				if (timeoutTimer) {
+					clearTimeout(timeoutTimer);
+					timeoutTimer = undefined;
+				}
 			} else {
 				timedOut = true;
 			}
