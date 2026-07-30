@@ -24,6 +24,7 @@ import {
 	withOwnedManagedSessionContext,
 } from "../extensions/agent-browser/lib/managed-session-restore.js";
 import { buildProcessStartIdentityCommand, buildProcessStartIdentityCommands, normalizeProcessStartIdentity, processStartIdentitiesMatch, resolveProcessStartIdentityFromCommands } from "../extensions/agent-browser/lib/process-identity.js";
+import type { ProcessTreeCleanupResult } from "../extensions/agent-browser/lib/process.js";
 import {
 	buildAgentBrowserProcessEnv,
 	ensureAgentBrowserSocketDir,
@@ -518,6 +519,12 @@ test("runAgentBrowserProcess stops a hung upstream client at the wrapper watchdo
 			cwd: tempDir,
 			env: { PATH: `${tempDir}${delimiter}${basePath}` },
 			timeoutMs: 100,
+			windowsTaskkill: async (pid) => ({
+				attempted: true,
+				exitCode: 0,
+				method: "taskkill /PID <pid> /T /F",
+				pid,
+			}),
 		});
 
 		assert.equal(processResult.timedOut, true);
@@ -629,6 +636,14 @@ test("runAgentBrowserProcess returns a forced abort result when upstream never e
 	try {
 		const startedAt = Date.now();
 		const cleanupPids: number[] = [];
+		let resolveCleanupStarted: (() => void) | undefined;
+		const cleanupStarted = new Promise<void>((resolve) => {
+			resolveCleanupStarted = resolve;
+		});
+		let resolveCleanup: ((result: ProcessTreeCleanupResult) => void) | undefined;
+		const cleanupResult = new Promise<ProcessTreeCleanupResult>((resolve) => {
+			resolveCleanup = resolve;
+		});
 		const resultPromise = runAgentBrowserProcess({
 			args: ["--version"],
 			cwd: tempDir,
@@ -643,14 +658,18 @@ test("runAgentBrowserProcess returns a forced abort result when upstream never e
 			timeoutMs: 25,
 			windowsTaskkill: async (pid) => {
 				cleanupPids.push(pid);
-				return {
-					attempted: true,
-					error: "simulated cleanup warning",
-					exitCode: 1,
-					method: "taskkill /PID <pid> /T /F",
-					pid,
-				};
+				resolveCleanupStarted?.();
+				return await cleanupResult;
 			},
+		});
+		await cleanupStarted;
+		assert.deepEqual(killSignals, [], "direct child signaling must wait for Windows process-tree cleanup");
+		resolveCleanup?.({
+			attempted: true,
+			error: "simulated cleanup warning",
+			exitCode: 1,
+			method: "taskkill /PID <pid> /T /F",
+			pid: 12345,
 		});
 		const processResult = await resultPromise;
 
@@ -794,6 +813,12 @@ test("runAgentBrowserProcess returns timeout exit code when descendants keep std
 				PI_AGENT_BROWSER_TEST_LINGER_PID_PATH: lingerPidPath,
 			},
 			timeoutMs,
+			windowsTaskkill: async (pid) => ({
+				attempted: true,
+				exitCode: 0,
+				method: "taskkill /PID <pid> /T /F",
+				pid,
+			}),
 		});
 		const elapsedMs = Date.now() - startedAt;
 

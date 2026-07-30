@@ -666,19 +666,33 @@ export async function runAgentBrowserProcess(options: {
 			stderr = appendTail(stderr, `${stderr.length > 0 ? "\n" : ""}${message}\n`, MAX_BUFFERED_STDERR_CHARS);
 		};
 
-		const startWindowsProcessTreeCleanup = () => {
-			if (platform !== "win32" || child.pid === undefined || pendingProcessTreeCleanup) return;
+		const startWindowsProcessTreeCleanup = (): Promise<void> | undefined => {
+			if (platform !== "win32" || child.pid === undefined) return undefined;
+			if (pendingProcessTreeCleanup) return pendingProcessTreeCleanup;
+			const pid = child.pid;
 			processTreeCleanup = {
 				attempted: true,
 				method: "taskkill /PID <pid> /T /F",
-				pid: child.pid,
+				pid,
 			};
-			pendingProcessTreeCleanup = windowsTaskkill(child.pid).then((result) => {
-				processTreeCleanup = result;
-				if (result.error) {
-					appendStderrDiagnostic(`[pi-agent-browser] Windows process-tree cleanup warning: ${result.error}`);
-				}
-			});
+			pendingProcessTreeCleanup = windowsTaskkill(pid)
+				.then((result) => {
+					processTreeCleanup = result;
+					if (result.error) {
+						appendStderrDiagnostic(`[pi-agent-browser] Windows process-tree cleanup warning: ${result.error}`);
+					}
+				})
+				.catch((error) => {
+					const cleanupError = error instanceof Error ? error : new Error(String(error));
+					processTreeCleanup = {
+						attempted: true,
+						error: cleanupError.message,
+						method: "taskkill /PID <pid> /T /F",
+						pid,
+					};
+					appendStderrDiagnostic(`[pi-agent-browser] Windows process-tree cleanup warning: ${cleanupError.message}`);
+				});
+			return pendingProcessTreeCleanup;
 		};
 
 		const scheduleForcedResult = (reason: "abort" | "timeout") => {
@@ -703,12 +717,26 @@ export async function runAgentBrowserProcess(options: {
 			} else {
 				timedOut = true;
 			}
-			startWindowsProcessTreeCleanup();
-			child.kill("SIGTERM");
-			killTimer = setTimeout(() => {
-				child.kill("SIGKILL");
-			}, PROCESS_SIGKILL_GRACE_MS);
-			killTimer.unref?.();
+
+			let directKillStarted = false;
+			const signalDirectChild = () => {
+				if (settled || directKillStarted) return;
+				directKillStarted = true;
+				child.kill("SIGTERM");
+				killTimer = setTimeout(() => {
+					child.kill("SIGKILL");
+				}, PROCESS_SIGKILL_GRACE_MS);
+				killTimer.unref?.();
+			};
+
+			// `taskkill /T /F` owns the first Windows termination attempt so descendants
+			// cannot be orphaned by a direct-child signal that wins the race.
+			const processTreeCleanupPromise = startWindowsProcessTreeCleanup();
+			if (processTreeCleanupPromise) {
+				void processTreeCleanupPromise.then(signalDirectChild);
+			} else {
+				signalDirectChild();
+			}
 			scheduleForcedResult(reason);
 		};
 		const recordStdinError = (error: unknown) => {
