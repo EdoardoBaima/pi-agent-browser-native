@@ -8,6 +8,7 @@
 
 import assert from "node:assert/strict";
 import { execFileSync, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { EventEmitter, getEventListeners } from "node:events";
 import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -52,6 +53,14 @@ import {
 	withPatchedEnv,
 	writeFakeAgentBrowserBinary,
 } from "./helpers/agent-browser-harness.js";
+
+const MANAGED_RESTORE_TEST_ENCRYPTION_KEY = "a".repeat(64);
+
+function buildManagedRestoreTestHomeEnv(home: string, encryptionKey = MANAGED_RESTORE_TEST_ENCRYPTION_KEY): NodeJS.ProcessEnv {
+	return process.platform === "win32"
+		? { AGENT_BROWSER_ENCRYPTION_KEY: encryptionKey, USERPROFILE: home }
+		: { AGENT_BROWSER_ENCRYPTION_KEY: encryptionKey, HOME: home };
+}
 
 test("resolveSpawnedChildExitCode prefers close, then timeout, then exit fallback", () => {
 	assert.equal(
@@ -190,16 +199,13 @@ test("prepareAgentBrowserSpawnArgs preserves caller launch controls", () => {
 
 test("runAgentBrowserProcess passes upstream browser configuration and file access through", { concurrency: false }, async () => {
 	const tempDir = await mkdtemp(join(tmpdir(), "pi-agent-browser-raw-args-"));
-	const binaryPath = join(tempDir, "agent-browser");
 	const basePath = process.env.PATH ?? "";
-	await writeFile(binaryPath, `#!/usr/bin/env node
-const config = process.env.AGENT_BROWSER_CONFIG;
-process.stdout.write(JSON.stringify({ success: true, data: { allowFileAccessEnv: process.env.AGENT_BROWSER_ALLOW_FILE_ACCESS ?? null, args: process.argv.slice(2), config, configContent: config ? require("node:fs").readFileSync(config, "utf8") : null, envArgs: process.env.AGENT_BROWSER_ARGS ?? null } }));\n`, "utf8");
-	await chmod(binaryPath, 0o755);
+	await writeFakeAgentBrowserBinary(tempDir, `const config = process.env.AGENT_BROWSER_CONFIG;
+process.stdout.write(JSON.stringify({ success: true, data: { allowFileAccessEnv: process.env.AGENT_BROWSER_ALLOW_FILE_ACCESS ?? null, args: process.argv.slice(2), config, configContent: config ? require("node:fs").readFileSync(config, "utf8") : null, envArgs: process.env.AGENT_BROWSER_ARGS ?? null } }));`);
 	try {
 		const configPath = join(tempDir, "agent-browser.json");
 		await writeFile(configPath, "{\"headed\":true}\n");
-		await withPatchedEnv({ AGENT_BROWSER_ALLOW_FILE_ACCESS: "true", AGENT_BROWSER_ARGS: "--disable-gpu", AGENT_BROWSER_CONFIG: configPath, PATH: `${tempDir}${delimiter}${basePath}` }, async () => {
+		await withPatchedEnv({ AGENT_BROWSER_ALLOW_FILE_ACCESS: "true", AGENT_BROWSER_ARGS: "--disable-gpu", AGENT_BROWSER_CONFIG: configPath, PATH: `${tempDir}${delimiter}${basePath}`, PI_AGENT_BROWSER_TEST_PRESERVE_INTERNAL_LAUNCH_FLAGS: "1" }, async () => {
 			const result = await runAgentBrowserProcess({ args: ["--allow-file-access", "true", "open", "file:///tmp/page.html"], cwd: tempDir });
 			const parsed = await parseAgentBrowserEnvelope(result.stdout);
 			const data = parsed.envelope?.data as { allowFileAccessEnv?: string | null; args?: string[]; config?: string; configContent?: string | null; envArgs?: string | null };
@@ -213,7 +219,7 @@ process.stdout.write(JSON.stringify({ success: true, data: { allowFileAccessEnv:
 			const result = await runAgentBrowserProcess({ args: ["--session", "caller-owned", "open", "file:///tmp/page.html"], cwd: tempDir });
 			assert.equal(result.agentBrowserStarted, true);
 		});
-		await withPatchedEnv({ AGENT_BROWSER_ALLOW_FILE_ACCESS: "true", PATH: `${tempDir}${delimiter}${basePath}` }, async () => {
+		await withPatchedEnv({ AGENT_BROWSER_ALLOW_FILE_ACCESS: "true", PATH: `${tempDir}${delimiter}${basePath}`, PI_AGENT_BROWSER_TEST_PRESERVE_INTERNAL_LAUNCH_FLAGS: "1" }, async () => {
 			const result = await runAgentBrowserProcess({ args: ["--allow-file-access", "false", "get", "url"], cwd: tempDir, preserveAttachedBrowserSession: true });
 			const parsed = await parseAgentBrowserEnvelope(result.stdout);
 			const data = parsed.envelope?.data as { allowFileAccessEnv?: string | null; args?: string[] };
@@ -382,6 +388,7 @@ test("agent-browser socket path preflight reports long configured roots before u
 	const socketDir = `/tmp/${"deep/".repeat(20)}sockets`;
 	const error = getAgentBrowserSocketPathValidationError({
 		args: ["--namespace", "team", "--session", "managed", "open", "https://example.com"],
+		platform: "linux",
 		socketDir,
 	});
 	assert.match(error ?? "", /Unix socket path would be \d+ bytes \(max 103\)/);
@@ -426,7 +433,8 @@ test("agent-browser socket storage rejects unsafe permissions, ancestry, symlink
 	}
 });
 
-test("runAgentBrowserProcess uses the Pi-scoped socket directory without trusting ambient upstream configuration", { concurrency: false }, async () => {
+test("runAgentBrowserProcess uses the Pi-scoped socket directory without trusting ambient upstream configuration", { concurrency: false }, async (context) => {
+	if (typeof process.getuid !== "function") return context.skip("POSIX ownership metadata is unavailable");
 	const tempDir = await mkdtemp(join(tmpdir(), "pi-agent-browser-socket-config-"));
 	const socketPath = join(tempDir, "socket");
 	try {
@@ -1023,8 +1031,8 @@ if (args.includes("session") && args.includes("info")) {
 
 	execFileSync("git", ["init", "-q", tempDir], { stdio: "ignore" });
 	try {
-		await withPatchedEnv({ HOME: tempDir, PATH: `${tempDir}${delimiter}${basePath}` }, async () => {
-			const harness = createExtensionHarness({ cwd: tempDir });
+		await withPatchedEnv({ ...buildManagedRestoreTestHomeEnv(tempDir), HOME: tempDir, PATH: `${tempDir}${delimiter}${basePath}` }, async () => {
+			const harness = createExtensionHarness({ cwd: tempDir, sessionId: randomUUID() });
 			await runExtensionEvent(harness.handlers, "session_start", { reason: "new" }, harness.ctx);
 
 			const firstOpen = await executeRegisteredTool(harness.tool, harness.ctx, {
@@ -1108,17 +1116,17 @@ test("runAgentBrowserProcess pins managed restore identity while preserving call
 	await cleanupSecureTempArtifacts();
 	const tempDir = await mkdtemp(join(tmpdir(), "pi-agent-browser-namespace-env-"));
 	const basePath = process.env.PATH ?? "";
-	await writeFakeAgentBrowserBinary(tempDir, `const fs = require("node:fs"); const config = process.env.AGENT_BROWSER_CONFIG; process.stdout.write(JSON.stringify({ success: true, data: { args: process.argv.slice(2), config, configContent: config ? fs.readFileSync(config, "utf8") : null, encryptionKey: process.env.AGENT_BROWSER_ENCRYPTION_KEY ?? null, home: process.env.HOME ?? null, namespace: process.env.AGENT_BROWSER_NAMESPACE ?? null, restore: process.env.AGENT_BROWSER_RESTORE ?? null } }));`);
+	await writeFakeAgentBrowserBinary(tempDir, `const fs = require("node:fs"); const config = process.env.AGENT_BROWSER_CONFIG; process.stdout.write(JSON.stringify({ success: true, data: { args: process.argv.slice(2), config, configContent: config ? fs.readFileSync(config, "utf8") : null, encryptionKey: process.env.AGENT_BROWSER_ENCRYPTION_KEY ?? null, home: process.platform === "win32" ? process.env.USERPROFILE ?? null : process.env.HOME ?? null, namespace: process.env.AGENT_BROWSER_NAMESPACE ?? null, restore: process.env.AGENT_BROWSER_RESTORE ?? null } }));`);
 	execFileSync("git", ["init", "-q", tempDir], { stdio: "ignore" });
 	try {
-		await withPatchedEnv({ AGENT_BROWSER_NAMESPACE: "redirected", HOME: tempDir, PATH: `${tempDir}${delimiter}${basePath}` }, async () => {
+		await withPatchedEnv({ AGENT_BROWSER_NAMESPACE: "redirected", ...buildManagedRestoreTestHomeEnv(tempDir), PATH: `${tempDir}${delimiter}${basePath}` }, async () => {
 			const restoreState = new ManagedSessionRestoreState();
 			const args = ["--session", "piab-managed", "snapshot", "-i"];
 			const context = buildOwnedManagedSessionRestoreContext({
 				args,
 				cwd: tempDir,
 				managedSessionName: "piab-managed",
-				parentEnv: { AGENT_BROWSER_ENCRYPTION_KEY: "a".repeat(64), HOME: tempDir, PATH: `${tempDir}${delimiter}${basePath}` },
+				parentEnv: { ...buildManagedRestoreTestHomeEnv(tempDir), PATH: `${tempDir}${delimiter}${basePath}` },
 				restoreState,
 				sessionName: "piab-managed",
 			});
@@ -1126,13 +1134,13 @@ test("runAgentBrowserProcess pins managed restore identity while preserving call
 			const processResult = await withOwnedManagedSessionContext(context, () => runAgentBrowserProcess({
 				args,
 				cwd: tempDir,
-				env: { AGENT_BROWSER_ENCRYPTION_KEY: "b".repeat(64), HOME: join(tempDir, "later-home-override") },
+				env: buildManagedRestoreTestHomeEnv(join(tempDir, "later-home-override"), "b".repeat(64)),
 				managedSessionRestoreState: restoreState,
 				ownedManagedSession: true,
 			}));
 			const parsed = await parseAgentBrowserEnvelope(processResult.stdout);
 			const data = parsed.envelope?.data as { config?: string; configContent?: string; encryptionKey?: string; home?: string; namespace?: string; restore?: string };
-			assert.equal(data.encryptionKey, "a".repeat(64));
+			assert.equal(data.encryptionKey, MANAGED_RESTORE_TEST_ENCRYPTION_KEY);
 			assert.equal(data.home, await realpath(tempDir));
 			assert.equal(data.namespace, "");
 			assert.equal(data.restore, createManagedSessionRestoreKey(tempDir, "piab-managed"));
@@ -1168,7 +1176,7 @@ test("runAgentBrowserProcess refuses a changed checkout identity before spawning
 	await writeFakeAgentBrowserBinary(tempDir, `require("node:fs").writeFileSync(${JSON.stringify(startedPath)}, "started");`);
 	execFileSync("git", ["init", "-q", tempDir], { stdio: "ignore" });
 	try {
-		await withPatchedEnv({ HOME: tempDir, PATH: `${tempDir}${delimiter}${basePath}` }, async () => {
+		await withPatchedEnv({ ...buildManagedRestoreTestHomeEnv(tempDir), PATH: `${tempDir}${delimiter}${basePath}` }, async () => {
 			const restoreState = new ManagedSessionRestoreState();
 			const args = ["--session", "piab-managed", "open", "https://example.com"];
 			const context = buildOwnedManagedSessionRestoreContext({
@@ -1179,7 +1187,11 @@ test("runAgentBrowserProcess refuses a changed checkout identity before spawning
 				sessionName: "piab-managed",
 			});
 			assert.equal(context?.restoreDecision, "enabled");
-			await chmod(join(tempDir, ".git", "pi-agent-browser-project-generation-v1.json"), 0o644);
+			await writeFile(
+				join(tempDir, ".git", "pi-agent-browser-project-generation-v1.json"),
+				JSON.stringify({ id: "00000000-0000-4000-8000-000000000000", version: 1 }),
+				"utf8",
+			);
 			const result = await withOwnedManagedSessionContext(context, () => runAgentBrowserProcess({
 				args,
 				cwd: tempDir,
@@ -1202,7 +1214,7 @@ test("runAgentBrowserProcess refuses incompatible environment changes after plan
 	await writeFakeAgentBrowserBinary(tempDir, `require("node:fs").writeFileSync(${JSON.stringify(startedPath)}, "started");`);
 	execFileSync("git", ["init", "-q", tempDir], { stdio: "ignore" });
 	try {
-		await withPatchedEnv({ HOME: tempDir, PATH: `${tempDir}${delimiter}${basePath}` }, async () => {
+		await withPatchedEnv({ ...buildManagedRestoreTestHomeEnv(tempDir), PATH: `${tempDir}${delimiter}${basePath}` }, async () => {
 			const restoreState = new ManagedSessionRestoreState();
 			const args = ["--session", "piab-managed", "open", "https://example.com"];
 			const context = buildOwnedManagedSessionRestoreContext({ args, cwd: tempDir, managedSessionName: "piab-managed", restoreState, sessionName: "piab-managed" });
@@ -1285,7 +1297,7 @@ test("runAgentBrowserProcess suppresses visible restore autosave tabs for headed
 			["piab-headless-explicit", ["--headed", "false"], undefined, { AGENT_BROWSER_HEADED: "true" }, true, null, false],
 			["caller-headed", ["--headed"], undefined, undefined, false, null, false],
 		] as const) {
-			await withPatchedEnv({ AGENT_BROWSER_AUTOSAVE_INTERVAL_MS: parentAutosave, HOME: tempDir, PATH: `${tempDir}${delimiter}${basePath}` }, async () => {
+			await withPatchedEnv({ AGENT_BROWSER_AUTOSAVE_INTERVAL_MS: parentAutosave, ...buildManagedRestoreTestHomeEnv(tempDir), PATH: `${tempDir}${delimiter}${basePath}` }, async () => {
 				const args = [...launchArgs, "--session", sessionName, "open", "https://example.com"];
 				const restoreState = new ManagedSessionRestoreState();
 				const context = buildOwnedManagedSessionRestoreContext({ args, cwd: tempDir, headedManagedAutosaveDisabled: retainedHeadedDefault, headedManagedAutosaveInterval: retainedHeadedDefault ? "0" : undefined, managedSessionName: sessionName, restoreState, sessionName });
