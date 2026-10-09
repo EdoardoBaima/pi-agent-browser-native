@@ -34,7 +34,7 @@ pi list
 chezmoi source-path
 ```
 
-Inspect the installed clone reported by `pi list` with `git -C <path> rev-parse HEAD`. Compare the live `~/.pi/agent/settings.json` entry with `dot_pi/agent/settings.json.tmpl` under `chezmoi source-path`. The chezmoi template is the durable source; the live settings file is rendered state.
+Inspect the installed clone reported by `pi list` with `git -C <path> rev-parse HEAD`. Compare the live `~/.pi/agent/settings.json` entry with `.chezmoitemplates/pi-settings.json` under `chezmoi source-path`. The chezmoi template is the durable source; the live settings file is rendered state. Keep executable edits in a separate source checkout, outside Pi's managed package clone.
 
 Keep Pi's three states distinct:
 
@@ -62,6 +62,14 @@ Equivalent means code or upstream history explains the replacement **and** the o
 For an audit-only request, stop here with the exact ahead/behind counts, installed commit, fork-only commits, and one recommended outcome.
 
 *Complete when every fork-only commit is classified as retain, replace with proven upstream behavior, or investigate further.*
+
+## Focused adoption without publication
+
+When the request limits scope or prohibits publishing, adopt the relevant upstream behavior on an isolated branch based on the configured fork revision. Review dependencies and preserve the remaining fork commits; do not claim the fork is fully reconciled. Record the selected upstream commit, omissions, and validation in the changelog and architecture documentation.
+
+Pi can load a verified local package directory without copying it. Configuration source must declare that development channel explicitly for Windows, using a stable source checkout path. Build and test the source first, commit it, then commit and apply the scoped chezmoi reference. Preserve the old installed clone. Verify the newly configured source in a fresh Pi process; report that existing sessions still need restart or reload. Remote branch/mirror equality is not a completion claim for this route.
+
+The current focused adoption retains all 13 fork commits through `296745d`: Windows shim resolution and build inclusion, bounded timeout/abort and process-tree cleanup, native process fixtures, fork lineage and reconciliation guidance, and native Windows smoke instructions. Upstream `1f8cac2` was reviewed for instruction ownership only; equivalence of its newer Windows transport is unproven. Full rebase or retirement remains a separate reconciliation.
 
 ## 3A. Keep and update the fork branch
 
@@ -101,7 +109,7 @@ Use the configured package identity from `pi list` if it differs. On native Wind
 
 Take this branch only after the proof in step 2 covers every fork-only behavior.
 
-Load the `chezmoi-parity` skill. In the chezmoi source repository, change the Windows package source in `dot_pi/agent/settings.json.tmpl` from the GitHub fork branch to `npm:pi-agent-browser-native`, matching WSL. Review `chezmoi diff`, commit and push the `pi_config` source to its Forgejo `origin`, then apply it.
+Load the `chezmoi-parity` skill. In the chezmoi source repository, change the Windows package source in `.chezmoitemplates/pi-settings.json` from the GitHub fork branch to `npm:pi-agent-browser-native`, matching WSL. Review `chezmoi diff`, commit and push the `pi_config` source to its Forgejo `origin`, then apply it.
 
 Install and verify the npm package before removing the old managed Git clone:
 

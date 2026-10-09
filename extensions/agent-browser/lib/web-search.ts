@@ -1,5 +1,4 @@
 import { JsonSchema, type JsonSchemaBuilder } from "./json-schema.js";
-import { WEB_SEARCH_PROMPT_GUIDELINE } from "./playbook.js";
 import { StringEnum as localStringEnum, type StringEnumBuilder } from "./string-enum-schema.js";
 import {
 	DEFAULT_WEB_SEARCH_PROVIDER,
@@ -736,13 +735,6 @@ export function createAgentBrowserWebSearchTool(
 		label: "Agent Browser Web Search",
 		description: `Search the live web with Exa or Brave for current or external information. For Exa research tasks, use searchType deep-lite or deeper. Returns up to ${MAX_SEARCH_RESULT_COUNT} concise web results.`,
 		promptSnippet: "Search the live web with Exa or Brave for current or external information.",
-		promptGuidelines: [
-			WEB_SEARCH_PROMPT_GUIDELINE,
-			"agent_browser_web_search chooses Exa or Brave from configured keys; when both are available, Exa is preferred by default unless webSearch.preferredProvider says otherwise. Use provider only when the user/config calls for a specific provider.",
-			"Use Exa deep only when deep-lite may miss angles, and deep-reasoning only for exhaustive or still-thin research. Do not run parallel agent_browser_web_search calls; make one high-signal query, inspect its results, then at most one follow-up.",
-			"If agent_browser_web_search returns HTTP 429, stop searching and tell the user the API plan/rate limit needs time or a plan change.",
-			"After using agent_browser_web_search, cite result URLs in the final answer when web evidence informed the answer.",
-		],
 		parameters: AgentBrowserWebSearchParams,
 		async execute(_toolCallId: string, params: AgentBrowserWebSearchParamsInput, signal?: AbortSignal, _onUpdate?: unknown, ctx?: { cwd: string; isProjectTrusted?: () => boolean }) {
 			const runtimeConfigState = ctx ? options.loadConfigState?.(ctx) ?? configState : configState;

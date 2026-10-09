@@ -90,11 +90,13 @@ Config layers merge in that order: global, project, override. The shared policy 
 
 Browser default config is intentionally advisory. It can add prompt guidance for signed-in/account-specific tasks and alternate Chromium-compatible executables, but current releases do not auto-inject `--profile` or `--executable-path` into every launch. Loaded project config can provide the same guidance as global and override config; Pi/project trust decides whether that project layer is loaded. Automatic launch-default mutation would affect privacy, browser state, and host executable choice, so it needs a separate explicit design and test pass.
 
-### Prompt guidance budget
+### Instruction ownership
 
-Runtime `promptGuidelines` are a Tier A budget, not a full manual. They stay short enough to load on every `agent_browser`-aware turn and carry only high-impact rules: input-mode choice, the open → snapshot → ref loop, launch-scoped session handling, artifact verification, structured `nextActions`, extraction basics, and hard agent-responsibility boundaries: honor explicit stop boundaries, allow ordinary requested non-destructive submissions in authenticated unattended/auto-approved employee flows, and require explicit authorization for purchases, production-control, destructive/irreversible, or account/security/privacy changes.
+The browser contributes its full operating playbook through `systemPromptOptions.sections.agent_browser` on each turn. Pi owns composition and instruction history; providers own transport rendering. Browser instructions never replace the full system prompt or depend on words in user messages. Explicit custom system prompts keep Pi's normal semantics.
 
-Tier B guidance lives in `SHARED_BROWSER_PLAYBOOK_GUIDELINES`, generated README/command-reference fragments, and targeted docs. When a workflow needs examples, caveats, or long command-family coverage, add it there instead of expanding always-on prompt text. If a Tier B rule prevents a repeated real failure, promote only the smallest durable sentence into Tier A and keep the generated-doc mirrors aligned.
+`playbook.ts` owns static guidance and generated documentation fragments. The section adds absolute installed documentation paths and the effective browser configuration from the existing global → trusted project → override merge. Each setting appears once; a partial override retains inherited fields. The trust decision controls project loading before composition. Tools do not duplicate these instructions in `promptGuidelines`.
+
+This adopts the structured-section path from upstream `bf7d06f5f3bf6b92d887d169c145d4019bd0559a`. Pi 1.1.0 has no `pi:instruction-groups` consumer, so this fork uses the public section API directly.
 
 ### No reusable recipe layer yet
 

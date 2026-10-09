@@ -90,7 +90,7 @@ The result is optimized for agent work:
 
 ## Fastest way to try it
 
-Use Pi 0.84.0 or newer. This package keeps optional Pi core imports as wildcard `peerDependencies` because Pi package docs require the host Pi install to provide those packages, pins its direct Pi validation dependencies to 0.84.0, and makes older hosts a setup failure through `pi-agent-browser-doctor`. Version 0.3.0 intentionally provides no compatibility shims for older Pi releases.
+This fork requires Pi 1.1.0 or newer for structured instruction composition. Pi supplies the optional wildcard peer dependencies; direct validation dependencies pin 1.1.0, and `pi-agent-browser-doctor` reports older hosts as unsupported.
 
 Install upstream `agent-browser` first and make sure it is on `PATH`:
 
@@ -125,7 +125,7 @@ The `which` package and launcher symlink satisfy upstream's existing Linux syste
 
 Reapply the musl command symlink after reinstalling or upgrading upstream until #1587 is resolved. The wrapper uses Termux-private socket/policy storage, compact 80-bit managed identities so ordinary namespaces and fresh rotations fit the Unix socket-path limit, Termux's `ps`, and Android app-sandbox trust rules automatically. Headless browser flows, managed restore, namespaced sessions, `script`, `qa`, `job`, screenshots, and recording are locally validated; Electron desktop discovery/lifecycle is not applicable to Android apps. Android remains outside the release-blocking Crabbox macOS/Ubuntu/native-Windows matrix until a repeatable Android provider target is added.
 
-The native tool also gives agents absolute installed-package doc paths in its compact runtime guidance. Raw `args` are the 1:1 upstream CLI coverage path for the targeted `agent-browser` release; `script` adds bounded one-shot orchestration, while typed modes such as `semanticAction`, `job`, `qa`, source lookups, and Electron lifecycle helpers are reliability shorthands layered on top. Agents should read `README.md` for setup/dependencies, `docs/COMMAND_REFERENCE.md` for targeted command workflows, and `docs/TOOL_CONTRACT.md` for result/detail contracts only when deeper guidance is needed.
+The browser contributes its full instructions and absolute installed-package doc paths through a Pi-owned prompt section; see [instruction ownership](docs/ARCHITECTURE.md#instruction-ownership). Raw `args` are the 1:1 upstream CLI coverage path for the targeted `agent-browser` release; `script` adds bounded one-shot orchestration, while typed modes such as `semanticAction`, `job`, `qa`, source lookups, and Electron lifecycle helpers are reliability shorthands layered on top. Agents should read `README.md` for setup/dependencies, `docs/COMMAND_REFERENCE.md` for targeted command workflows, and `docs/TOOL_CONTRACT.md` for result/detail contracts only when deeper guidance is needed.
 
 Then install this Pi package:
 

@@ -36,6 +36,9 @@ const PLAIN_RENDER_FG_COLORS = {
 	mdQuote: "#ffffff",
 	mdQuoteBorder: "#ffffff",
 	muted: "#ffffff",
+	scrollbarTrack: "#ffffff",
+	scrollbarThumb: "#ffffff",
+	searchMatchText: "#ffffff",
 	success: "#ffffff",
 	syntaxComment: "#ffffff",
 	syntaxFunction: "#ffffff",
@@ -66,7 +69,7 @@ const PLAIN_RENDER_FG_COLORS = {
 
 const PLAIN_RENDER_BG_COLORS = {
 	customMessageBg: "#000000",
-	scrollbarThumb: "#000000",
+	searchMatchBg: "#000000",
 	selectedBg: "#000000",
 	toolErrorBg: "#000000",
 	toolPendingBg: "#000000",

@@ -8,6 +8,8 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { CAPABILITY_BASELINE } from "../scripts/agent-browser-capability-baseline.mjs";
 
@@ -36,7 +38,7 @@ function passingVersion() {
 }
 
 function passingPiVersion() {
-	return "0.84.0\n";
+	return "1.1.0\n";
 }
 
 function evaluateDoctorWithPi(options: Parameters<typeof evaluateDoctor>[0] = {}) {
@@ -49,8 +51,8 @@ test("normalizeAgentBrowserVersion strips the upstream binary label", () => {
 });
 
 test("normalizePiVersion strips an optional pi binary label", () => {
-	assert.equal(normalizePiVersion("pi 0.84.0\n"), "0.84.0");
-	assert.equal(normalizePiVersion("0.84.0\n"), "0.84.0");
+	assert.equal(normalizePiVersion("pi 1.1.0\n"), "1.1.0");
+	assert.equal(normalizePiVersion("1.1.0\n"), "1.1.0");
 });
 
 test("doctor reports missing agent-browser with actionable install guidance", async () => {
@@ -108,14 +110,14 @@ test("doctor reports versions below the supported floor", async () => {
 test("doctor fails when Pi is below the minimum runtime floor", async () => {
 	const report = await evaluateDoctor({
 		runAgentBrowser: async () => passingVersion(),
-		runPi: async () => "0.83.0\n",
+		runPi: async () => "1.0.0\n",
 		skipSourceCheck: true,
 	});
 	const text = formatDoctorReport(report);
 
 	assert.equal(report.failures.length, 1);
-	assert.match(text, /Pi 0\.84\.0 or newer is required; found 0\.83\.0/);
-	assert.match(text, /enforces the Pi 0\.84\.0 runtime floor/);
+	assert.match(text, /Pi 1\.1\.0 or newer is required; found 1\.0\.0/);
+	assert.match(text, /enforces the Pi 1\.1\.0 runtime floor/);
 	assert.match(text, /Doctor found setup failures/);
 });
 
@@ -131,14 +133,14 @@ test("doctor warns instead of failing when Pi version cannot be inspected", asyn
 
 	assert.equal(report.failures.length, 0);
 	assert.match(text, /Could not inspect pi --version/);
-	assert.match(text, /Pi 0\.84\.0 or newer is required/);
+	assert.match(text, /Pi 1\.1\.0 or newer is required/);
 	assert.match(text, /Doctor passed/);
 });
 
 test("doctor reports duplicate package and checkout sources with remediation", async () => {
 	const settingsByPath = new Map([
-		["/agent/settings.json", JSON.stringify({ packages: ["npm:pi-agent-browser-native"] })],
-		["/repo/.pi/settings.json", JSON.stringify({ extensions: ["/repo/extensions/agent-browser/index.ts"] })],
+		[resolve("/agent/settings.json"), JSON.stringify({ packages: ["npm:pi-agent-browser-native"] })],
+		[resolve("/repo/.pi/settings.json"), JSON.stringify({ extensions: ["/repo/extensions/agent-browser/index.ts"] })],
 	]);
 	const report = await evaluateDoctorWithPi({
 		agentDir: "/agent",
@@ -159,7 +161,7 @@ test("doctor reports duplicate package and checkout sources with remediation", a
 });
 
 test("doctor passes the source check when exactly one configured source is active", async () => {
-	const settingsByPath = new Map([["/agent/settings.json", JSON.stringify({ packages: ["npm:pi-agent-browser-native"] })]]);
+	const settingsByPath = new Map([[resolve("/agent/settings.json"), JSON.stringify({ packages: ["npm:pi-agent-browser-native"] })]]);
 	const report = await evaluateDoctorWithPi({
 		agentDir: "/agent",
 		cwd: "/repo",
@@ -175,7 +177,7 @@ test("doctor passes the source check when exactly one configured source is activ
 });
 
 test("doctor resolves relative package sources from their settings file directory", async () => {
-	const settingsByPath = new Map([["/home/user/.pi/agent/settings.json", JSON.stringify({ packages: ["../../Projects/AI/pi-agent-browser"] })]]);
+	const settingsByPath = new Map([[resolve("/home/user/.pi/agent/settings.json"), JSON.stringify({ packages: ["../../Projects/AI/pi-agent-browser"] })]]);
 	const report = await evaluateDoctorWithPi({
 		agentDir: "/home/user/.pi/agent",
 		cwd: "/home/user/Projects/AI/pi-agent-browser",
@@ -192,7 +194,7 @@ test("doctor resolves relative package sources from their settings file director
 
 test("doctor resolves relative extension sources from their settings file directory", async () => {
 	const settingsByPath = new Map([
-		["/home/user/.pi/agent/settings.json", JSON.stringify({ extensions: ["../../Projects/AI/pi-agent-browser/extensions/agent-browser/index.ts"] })],
+		[resolve("/home/user/.pi/agent/settings.json"), JSON.stringify({ extensions: ["../../Projects/AI/pi-agent-browser/extensions/agent-browser/index.ts"] })],
 	]);
 	const report = await evaluateDoctorWithPi({
 		agentDir: "/home/user/.pi/agent",
@@ -210,7 +212,7 @@ test("doctor resolves relative extension sources from their settings file direct
 
 test("doctor recognizes compiled extension entrypoint sources", async () => {
 	const settingsByPath = new Map([
-		["/home/user/.pi/agent/settings.json", JSON.stringify({ extensions: ["../../Projects/AI/pi-agent-browser/dist/extensions/agent-browser/index.js"] })],
+		[resolve("/home/user/.pi/agent/settings.json"), JSON.stringify({ extensions: ["../../Projects/AI/pi-agent-browser/dist/extensions/agent-browser/index.js"] })],
 	]);
 	const report = await evaluateDoctorWithPi({
 		agentDir: "/home/user/.pi/agent",
@@ -267,9 +269,9 @@ test("doctor remains read-only through injected I/O", async () => {
 });
 
 test("isDirectRun resolves npm bin symlinks before comparing the entrypoint", () => {
-	const metaUrl = "file:///package/scripts/doctor.mjs";
+	const metaUrl = pathToFileURL(resolve("/package/scripts/doctor.mjs")).href;
 	const resolveRealPath = (path: string) => {
-		if (path === "/tmp/node_modules/.bin/pi-agent-browser-doctor") return "/package/scripts/doctor.mjs";
+		if (resolve(path) === resolve("/tmp/node_modules/.bin/pi-agent-browser-doctor")) return resolve("/package/scripts/doctor.mjs");
 		return path;
 	};
 

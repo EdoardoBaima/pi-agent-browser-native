@@ -1,14 +1,14 @@
 /**
  * Purpose: Verify prompt-derived policy helpers for the pi-agent-browser extension.
- * Responsibilities: Assert direct agent-browser bash allowance, browser-prompt detection, stop boundaries, and requested artifact extraction.
+ * Responsibilities: Assert direct agent-browser bash allowance, stop boundaries, and requested artifact extraction.
  * Scope: Unit-style Node test-runner coverage for pure prompt-policy helpers.
  */
 
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { WEB_SEARCH_PROMPT_GUIDELINE } from "../extensions/agent-browser/lib/playbook.js";
-import { buildPromptPolicy, getLatestUserPrompt, shouldAppendBrowserSystemPrompt } from "../extensions/agent-browser/lib/prompt-policy.js";
+
+import { buildPromptPolicy, getLatestUserPrompt } from "../extensions/agent-browser/lib/prompt-policy.js";
 
 test("buildPromptPolicy and getLatestUserPrompt derive direct agent-browser bash policy from prompt text without globals", () => {
 	const prompt = getLatestUserPrompt([
@@ -307,23 +307,4 @@ test("buildPromptPolicy associates output intent with its path and rejects negat
 		buildPromptPolicy("Save a screenshot here:\n/tmp/output.png\n/var/folders/xx/T/pi-clipboard-input.png").requestedArtifacts,
 		[{ kind: "screenshot", path: "/tmp/output.png", required: true }],
 	);
-});
-
-test("shouldAppendBrowserSystemPrompt only targets clearly browser-oriented prompts", () => {
-	assert.equal(shouldAppendBrowserSystemPrompt("Open https://example.com and take a snapshot."), true);
-	assert.equal(shouldAppendBrowserSystemPrompt("Do web research and read the live docs for this API."), true);
-	assert.equal(shouldAppendBrowserSystemPrompt("Search online for the current browser automation docs."), true);
-	assert.equal(shouldAppendBrowserSystemPrompt("Please review browser compatibility docs."), false);
-	assert.equal(shouldAppendBrowserSystemPrompt("Summarize the article at https://example.com/blog/post for the changelog."), false);
-	assert.equal(shouldAppendBrowserSystemPrompt("Please review the repository architecture."), false);
-});
-
-test("web-search prompt guidance warns about anti-bot search form automation", () => {
-	assert.match(WEB_SEARCH_PROMPT_GUIDELINE, /Prefer agent_browser_web_search for current or external web facts/);
-	assert.match(WEB_SEARCH_PROMPT_GUIDELINE, /public search-engine forms/);
-	assert.match(WEB_SEARCH_PROMPT_GUIDELINE, /anti-bot\/CAPTCHA-gated/);
-	assert.match(WEB_SEARCH_PROMPT_GUIDELINE, /searchType: deep-lite/);
-	assert.match(WEB_SEARCH_PROMPT_GUIDELINE, /omit it for everyday lookups/);
-	assert.match(WEB_SEARCH_PROMPT_GUIDELINE, /after you have a target URL/);
-	assert.doesNotMatch(WEB_SEARCH_PROMPT_GUIDELINE, /one query, one follow-up max/);
 });

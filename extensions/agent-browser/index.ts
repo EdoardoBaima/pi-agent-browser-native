@@ -13,8 +13,10 @@ import { Text } from "@earendil-works/pi-tui";
 import { batchHasSuccessfulCloseAll, getSuccessfulBatchCloseLifecycle } from "./lib/batch-lifecycle.js";
 import {
 	PROJECT_RULE_PROMPT,
-	buildBrowserDefaultProfileGuideline,
-	buildBrowserExecutablePathGuideline,
+	QUICK_START_GUIDELINES,
+	SHARED_BROWSER_PLAYBOOK_GUIDELINES,
+	WRAPPER_TAB_RECOVERY_BEHAVIOR,
+	WEB_SEARCH_TOOL_PROMPT_GUIDELINES,
 	buildToolPromptGuidelines,
 } from "./lib/playbook.js";
 import { SessionPageState } from "./lib/session-page-state.js";
@@ -47,7 +49,7 @@ import {
 	getAgentBrowserVersionValidationError,
 	parseAgentBrowserVersionOutput,
 } from "./lib/upstream-version.js";
-import { buildPromptPolicy, getLatestUserPrompt, shouldAppendBrowserSystemPrompt } from "./lib/prompt-policy.js";
+import { buildPromptPolicy, getLatestUserPrompt } from "./lib/prompt-policy.js";
 import { isCloseAllCommand, isCloseCommand } from "./lib/command-taxonomy.js";
 import { hasLaunchScopedFlagToken } from "./lib/launch-scoped-flags.js";
 import { cleanupSecureTempArtifacts } from "./lib/temp.js";
@@ -947,13 +949,6 @@ export default function agentBrowserExtension(pi: ExtensionAPI) {
 		cwd: process.cwd(),
 		includeProjectConfig: false,
 	});
-	const webSearchToolAvailable = canRegisterWebSearchTool(agentBrowserConfig);
-	const toolPromptGuidelines = buildToolPromptGuidelines({
-		browserDefaultProfile: agentBrowserConfig.trustedBrowserDefaultProfile,
-		browserExecutablePath: agentBrowserConfig.trustedBrowserExecutablePath,
-		includeWebSearch: webSearchToolAvailable,
-		docs: getInstalledDocsPaths(),
-	});
 	const implicitSessionIdleTimeoutMs = String(getImplicitSessionIdleTimeoutMs());
 	const implicitSessionCloseTimeoutMs = getImplicitSessionCloseTimeoutMs();
 	let webSearchToolRegistered = false;
@@ -1422,28 +1417,25 @@ export default function agentBrowserExtension(pi: ExtensionAPI) {
 		await cleanupSecureTempArtifacts({ preservePaths: preservedElectronProfileDirs });
 	});
 
-	pi.on("before_agent_start", async (event, ctx) => {
-		if (!shouldAppendBrowserSystemPrompt(event.prompt)) {
-			return undefined;
-		}
-		const runtimeConfig = loadAgentBrowserConfigSync({
+	pi.on("before_agent_start", (event, ctx) => {
+		const config = loadAgentBrowserConfigSync({
 			cwd: ctx.cwd,
 			includeProjectConfig: shouldIncludeProjectConfig(ctx),
 		});
-		const browserGuidance = [
-			runtimeConfig.browserExecutablePathScope === "project"
-				? buildBrowserExecutablePathGuideline(runtimeConfig.browserExecutablePath)
-				: undefined,
-			runtimeConfig.browserDefaultProfileScope === "project"
-				? buildBrowserDefaultProfileGuideline(runtimeConfig.browserDefaultProfile)
-				: undefined,
-		].filter((line): line is string => typeof line === "string" && line.length > 0);
-		const runtimeConfigPrompt = browserGuidance.length > 0
-			? `\n\nProject agent_browser config guidance:\n${browserGuidance.map((line) => `- ${line}`).join("\n")}`
-			: "";
-		return {
-			systemPrompt: `${event.systemPrompt}\n\n${PROJECT_RULE_PROMPT}${runtimeConfigPrompt}`,
-		};
+		const guidelines = [
+			...buildToolPromptGuidelines({
+				browserDefaultProfile: config.browserDefaultProfile,
+				browserExecutablePath: config.browserExecutablePath,
+				includeWebSearch: webSearchToolRegistered,
+				docs: getInstalledDocsPaths(),
+			}),
+			...QUICK_START_GUIDELINES,
+			...SHARED_BROWSER_PLAYBOOK_GUIDELINES,
+			...WRAPPER_TAB_RECOVERY_BEHAVIOR,
+			...(webSearchToolRegistered ? WEB_SEARCH_TOOL_PROMPT_GUIDELINES : []),
+		];
+		// Pi owns prompt history and provider rendering; returning systemPrompt forces a replacement.
+		event.systemPromptOptions.sections.agent_browser = `${PROJECT_RULE_PROMPT}\n\n${[...new Set(guidelines)].map((line) => `- ${line}`).join("\n")}`;
 	});
 
 	pi.on("tool_call", async (event, ctx) => {
@@ -1471,7 +1463,6 @@ export default function agentBrowserExtension(pi: ExtensionAPI) {
 			"Browse and interact with websites using agent-browser. Use this for reading live pages, opening known URLs, taking snapshots or screenshots, clicking links, filling forms, extracting page content, and authenticated/profile-based browser work. Input choice: `script` for one-shot JavaScript orchestration; default `args` for open → snapshot -i → click/fill @refs; `semanticAction` for stable role/text/label targets; `job` or `qa` for multi-step checks; `electron` only for desktop apps; experimental `sourceLookup` / `networkSourceLookup` for candidates only.",
 		promptSnippet:
 			"Browse websites, read live docs, click and fill pages, extract browser content, take screenshots, and automate real web workflows.",
-		promptGuidelines: toolPromptGuidelines,
 		parameters: AGENT_BROWSER_PARAMS,
 		renderCall(args, theme, context) {
 			const text = context.lastComponent instanceof Text ? context.lastComponent : new Text("", 0, 0);

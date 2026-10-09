@@ -20,7 +20,7 @@ import { join, resolve } from "node:path";
 /** @typedef {{ kind: CredentialSourceKind; provider?: WebSearchProvider; rawValue: string; scope: AgentBrowserConfigScope }} CredentialSource */
 /** @typedef {{ global: string; project: string; override?: string }} AgentBrowserConfigPaths */
 /** @typedef {{ cwd?: string; env?: NodeJS.ProcessEnv; includeProjectConfig?: boolean }} AgentBrowserConfigLoadOptions */
-/** @typedef {{ browserDefaultProfile?: Required<BrowserDefaultProfileConfig>; browserDefaultProfileScope?: ConfigLayerScope; browserExecutablePath?: string; browserExecutablePathScope?: ConfigLayerScope; trustedBrowserDefaultProfile?: Required<BrowserDefaultProfileConfig>; trustedBrowserDefaultProfileScope?: ConfigLayerScope; trustedBrowserExecutablePath?: string; trustedBrowserExecutablePathScope?: ConfigLayerScope; config: AgentBrowserConfig; webSearchCredentialSources: Partial<Record<WebSearchProvider, CredentialSource>>; webSearchEnabled: boolean; webSearchPreferredProvider: WebSearchProvider; errors: string[]; layers: ConfigLayer[]; paths: AgentBrowserConfigPaths; projectConfigIncluded: boolean; warnings: string[] }} AgentBrowserConfigState */
+/** @typedef {{ browserDefaultProfile?: Required<BrowserDefaultProfileConfig>; browserDefaultProfileScope?: ConfigLayerScope; browserExecutablePath?: string; browserExecutablePathScope?: ConfigLayerScope; config: AgentBrowserConfig; webSearchCredentialSources: Partial<Record<WebSearchProvider, CredentialSource>>; webSearchEnabled: boolean; webSearchPreferredProvider: WebSearchProvider; errors: string[]; layers: ConfigLayer[]; paths: AgentBrowserConfigPaths; projectConfigIncluded: boolean; warnings: string[] }} AgentBrowserConfigState */
 /** @typedef {{ scope: string; path: string; exists: boolean }} ConfigFileSummary */
 
 const CONFIG_DIR_NAME = ".pi";
@@ -398,34 +398,6 @@ function getBrowserExecutablePathScope(layers) {
 
 /**
  * @param {ConfigLayer[]} layers
- * @returns {{ profile: Required<BrowserDefaultProfileConfig>; scope: ConfigLayerScope } | undefined}
- */
-function getTrustedBrowserDefaultProfile(layers) {
-	for (let index = layers.length - 1; index >= 0; index -= 1) {
-		const layer = layers[index];
-		if (!layer) continue;
-		const profile = getBrowserDefaultProfile(layer.config);
-		if (profile) return { profile, scope: layer.scope };
-	}
-	return undefined;
-}
-
-/**
- * @param {ConfigLayer[]} layers
- * @returns {{ executablePath: string; scope: ConfigLayerScope } | undefined}
- */
-function getTrustedBrowserExecutablePath(layers) {
-	for (let index = layers.length - 1; index >= 0; index -= 1) {
-		const layer = layers[index];
-		if (!layer) continue;
-		const executablePath = getBrowserExecutablePath(layer.config);
-		if (executablePath) return { executablePath, scope: layer.scope };
-	}
-	return undefined;
-}
-
-/**
- * @param {ConfigLayer[]} layers
  * @param {WebSearchProviderConfigKey} key
  * @returns {AgentBrowserConfigScope}
  */
@@ -463,17 +435,11 @@ export function buildWebSearchCredentialSources(options) {
  */
 export function buildAgentBrowserConfigState(options) {
 	const webSearchCredentialSources = buildWebSearchCredentialSources(options);
-	const trustedBrowserDefaultProfile = getTrustedBrowserDefaultProfile(options.layers);
-	const trustedBrowserExecutablePath = getTrustedBrowserExecutablePath(options.layers);
 	return {
 		browserDefaultProfile: getBrowserDefaultProfile(options.mergedConfig),
 		browserDefaultProfileScope: getBrowserDefaultProfileScope(options.layers),
 		browserExecutablePath: getBrowserExecutablePath(options.mergedConfig),
 		browserExecutablePathScope: getBrowserExecutablePathScope(options.layers),
-		trustedBrowserDefaultProfile: trustedBrowserDefaultProfile?.profile,
-		trustedBrowserDefaultProfileScope: trustedBrowserDefaultProfile?.scope,
-		trustedBrowserExecutablePath: trustedBrowserExecutablePath?.executablePath,
-		trustedBrowserExecutablePathScope: trustedBrowserExecutablePath?.scope,
 		config: options.mergedConfig,
 		webSearchCredentialSources,
 		webSearchEnabled: options.mergedConfig.webSearch?.enabled !== false,

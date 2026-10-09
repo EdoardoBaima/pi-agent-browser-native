@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Changed
+
+- Adopt upstream `bf7d06f` instruction delivery through Pi-owned prompt sections. Browser guidance no longer forces a full system prompt when ordinary text contains words such as `snapshot`.
+- Compose the full browser playbook and effective trusted configuration in one section; remove duplicate tool guidance and obsolete per-layer config projections. Explicit custom prompt semantics remain Pi-owned.
+- Require and validate against Pi 1.1.0. Retain the Windows command-resolution and bounded process-termination fixes from fork revision `296745d`.
+
+### Validation
+
+- Native Windows: 72 focused instruction/configuration/provider-pipeline tests passed; 39 process tests passed with two POSIX-only skips. Build, typecheck, package contents, and live upstream command-reference sampling passed. A whole-prompt-return mutation fails the new composition regression.
+- Isolated `claude-agent-sdk/claude-opus-5-5` replay reproduced the old 400 rejection for the original message both after `ping` and as a first turn. Both sequences pass with this change; the second turn continues the SDK conversation. Custom prompts remain explicit. Native browser version/open/snapshot/title/close smoke passed.
+- The full Windows gate remains red: 709 passed, 72 failed, 10 skipped. Eight config-CLI failures also reproduce on untouched `296745d`; other failures include POSIX-only fixtures, Windows PATH handling and unsupported `tar.exe --force-local`. This focused adoption is not a full release qualification.
+
 ## 0.6.3 - 2026-09-01
 
 ### Added

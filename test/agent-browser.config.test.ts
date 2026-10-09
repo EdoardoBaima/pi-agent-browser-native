@@ -131,15 +131,11 @@ test("captures browser defaults with conservative profile policy and executable 
 	assert.equal(state.browserDefaultProfileScope, "global");
 	assert.equal(state.browserExecutablePath, "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser");
 	assert.equal(state.browserExecutablePathScope, "global");
-	assert.deepEqual(state.trustedBrowserDefaultProfile, { name: "Default", policy: "authenticated-only" });
-	assert.equal(state.trustedBrowserDefaultProfileScope, "global");
-	assert.equal(state.trustedBrowserExecutablePath, "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser");
-	assert.equal(state.trustedBrowserExecutablePathScope, "global");
 	assert.equal("defaultLaunchArgs" in (state.config.browser ?? {}), false);
 	assert.deepEqual(state.warnings, []);
 });
 
-test("records project-local browser guidance scope and uses it for prompt injection", async () => {
+test("loads project-local browser guidance with project scope", async () => {
 	const fixture = await createConfigFixture();
 	await writeJson(fixture.projectPath, {
 		version: 1,
@@ -151,14 +147,12 @@ test("records project-local browser guidance scope and uses it for prompt inject
 	const state = loadAgentBrowserConfigSync({ cwd: fixture.cwd, env: fixture.env });
 	assert.equal(state.browserDefaultProfileScope, "project");
 	assert.equal(state.browserExecutablePathScope, "project");
-	assert.deepEqual(state.trustedBrowserDefaultProfile, { name: "Project Profile", policy: "authenticated-only" });
-	assert.equal(state.trustedBrowserDefaultProfileScope, "project");
-	assert.equal(state.trustedBrowserExecutablePath, "/tmp/project-browser");
-	assert.equal(state.trustedBrowserExecutablePathScope, "project");
+	assert.deepEqual(state.browserDefaultProfile, { name: "Project Profile", policy: "authenticated-only" });
+	assert.equal(state.browserExecutablePath, "/tmp/project-browser");
 	assert.deepEqual(state.warnings, []);
 });
 
-test("project browser guidance shadows global values when project config is included", async () => {
+test("partial project browser config overrides executable and preserves the global profile", async () => {
 	const fixture = await createConfigFixture();
 	await writeJson(fixture.globalPath, {
 		version: 1,
@@ -170,15 +164,14 @@ test("project browser guidance shadows global values when project config is incl
 	await writeJson(fixture.projectPath, {
 		version: 1,
 		browser: {
-			defaultProfile: { name: "Project Profile", policy: "authenticated-only" },
 			executablePath: "/tmp/project-browser",
 		},
 	});
 	const state = loadAgentBrowserConfigSync({ cwd: fixture.cwd, env: fixture.env });
-	assert.deepEqual(state.browserDefaultProfile, { name: "Project Profile", policy: "authenticated-only" });
+	assert.deepEqual(state.browserDefaultProfile, { name: "Global Profile", policy: "authenticated-only" });
+	assert.equal(state.browserDefaultProfileScope, "global");
+	assert.equal(state.browserExecutablePathScope, "project");
 	assert.equal(state.browserExecutablePath, "/tmp/project-browser");
-	assert.deepEqual(state.trustedBrowserDefaultProfile, { name: "Project Profile", policy: "authenticated-only" });
-	assert.equal(state.trustedBrowserExecutablePath, "/tmp/project-browser");
 });
 
 test("uses raw BRAVE_API_KEY only as fallback when no config credential source exists", async () => {

@@ -83,7 +83,7 @@ test("does not register agent_browser_web_search without env or config credentia
 	await withPatchedEnv({ HOME: fixture.home, [AGENT_BROWSER_CONFIG_ENV]: undefined, [BRAVE_API_KEY_ENV]: undefined, [EXA_API_KEY_ENV]: undefined }, async () => {
 		const harness = createExtensionHarness({ cwd: fixture.cwd });
 		assert.equal(harness.getTool(AGENT_BROWSER_WEB_SEARCH_TOOL_NAME), undefined);
-		assert.equal(harness.getTool("agent_browser")?.promptGuidelines.includes("Use agent_browser for real browser or live web content."), true);
+
 	});
 });
 
@@ -203,18 +203,14 @@ test("agent_browser_web_search registration and execution ignore project config 
 	});
 });
 
-test("registers agent_browser_web_search with actionable search-type and rate-limit guidance", async () => {
+test("registers agent_browser_web_search with bounded search options and search-type descriptions", async () => {
 	const fixture = await createFixture();
 	await withPatchedEnv({ HOME: fixture.home, [AGENT_BROWSER_CONFIG_ENV]: undefined, [BRAVE_API_KEY_ENV]: "test-secret", [EXA_API_KEY_ENV]: undefined }, async () => {
 		const harness = createExtensionHarness({ cwd: fixture.cwd });
 		const tool = harness.getTool(AGENT_BROWSER_WEB_SEARCH_TOOL_NAME);
 		assert.ok(tool);
 		assert.ok(harness.getTool("agent_browser"));
-		const guidelines = tool.promptGuidelines.join("\n");
-		assert.match(guidelines, /Prefer agent_browser_web_search for current or external web facts/);
-		assert.match(guidelines, /searchType.*deep-lite/);
-		assert.match(guidelines, /Do not run parallel agent_browser_web_search calls/);
-		assert.match(guidelines, /HTTP 429/);
+
 		assert.match(tool.description, /deep-lite/);
 		const schema = tool.parameters as { properties?: Record<string, { description?: string; maxItems?: number }> };
 		assert.match(schema.properties?.searchType?.description ?? "", /deep-lite.*4s/);

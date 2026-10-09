@@ -29,6 +29,14 @@ export const WEB_SEARCH_PROMPT_GUIDELINE =
 	"Prefer agent_browser_web_search for current or external web facts and URL discovery over public search-engine forms that can hit anti-bot/CAPTCHA-gated pages. For research before implementation, pass searchType: deep-lite unless webSearch.defaultSearchType already does; omit it for everyday lookups so config/auto wins. Use agent_browser after you have a target URL that needs interaction, screenshots, or DOM inspection.";
 
 
+export const WEB_SEARCH_TOOL_PROMPT_GUIDELINES = [
+	WEB_SEARCH_PROMPT_GUIDELINE,
+	"agent_browser_web_search chooses Exa or Brave from configured keys; when both are available, Exa is preferred by default unless webSearch.preferredProvider says otherwise. Use provider only when the user/config calls for a specific provider.",
+	"Use Exa deep only when deep-lite may miss angles, and deep-reasoning only for exhaustive or still-thin research. Do not run parallel agent_browser_web_search calls; make one high-signal query, inspect its results, then at most one follow-up.",
+	"If agent_browser_web_search returns HTTP 429, stop searching and tell the user the API plan/rate limit needs time or a plan change.",
+	"After using agent_browser_web_search, cite result URLs in the final answer when web evidence informed the answer.",
+] as const;
+
 export const SHARED_BROWSER_PLAYBOOK_GUIDELINES = [
 	"Use top-level script only for one-shot loops, conditional page branches, or multi-page aggregation that would otherwise require several calls: await browser({ args, stdin?, timeoutMs? }), branch on its ok field, and emit one bounded JSON value. Script gets an isolated non-profile browser session that is always closed, cannot use caller session/namespace/lifecycle/attachment controls, inherited agent-browser launch/proxy settings, or host APIs, and is not a reusable named recipe. One top-level approval can authorize up to 25 inner calls, so inspect the full source before approval. Use args/job/qa for ordinary linear flows.",
 	"Standard workflow: open the page, snapshot -i, interact using current @refs from that snapshot, and re-snapshot after navigation, scrolling, rerendering, or other major DOM changes because refs are page-scoped; the wrapper fails mutation-prone stale/recycled refs before upstream can silently target a different current-page element. On dense pages, use wrapper-side snapshot -i --search <text> or snapshot -i --filter role=<role> to render matching refs while preserving the full ref map in details.refSnapshot, add snapshot --viewport when scroll position or above/below-fold context matters, and add snapshot --diff when a quick before/after ref-map delta would prevent reading a full spill file.",
@@ -92,7 +100,7 @@ export const WRAPPER_TAB_RECOVERY_BEHAVIOR = [
 	"If upstream reports tab_gone, the pinned bound tab is gone; use details.nextActions (tab list / tab new) instead of assuming another tab is yours.",
 ] as const;
 
-/** Tier A: always-on tool promptGuidelines (keep small; Tier B lives in SHARED_BROWSER_PLAYBOOK_GUIDELINES and docs). */
+/** Concise orientation included alongside the full operating playbook. */
 export const RUNTIME_PROMPT_GUIDELINES = [
 	"Use agent_browser with one input mode: script, args, semanticAction, job, qa, sourceLookup/networkSourceLookup, or electron. stdin: batch/eval/auth/wrapper batch only; electron rejects it; never pass --json.",
 	"For agent_browser, use open → snapshot -i → @refs; re-snapshot after changes. In authenticated unattended/auto-approved employee flows, ordinary requested non-destructive submissions may proceed. Honor explicit stops; require explicit authorization for purchases, production-control, destructive/irreversible, or account/security/privacy changes.",
