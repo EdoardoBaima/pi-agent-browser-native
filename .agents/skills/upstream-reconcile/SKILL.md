@@ -63,13 +63,13 @@ For an audit-only request, stop here with the exact ahead/behind counts, install
 
 *Complete when every fork-only commit is classified as retain, replace with proven upstream behavior, or investigate further.*
 
-## Focused adoption without publication
+## Focused adoption
 
-When the request limits scope or prohibits publishing, adopt the relevant upstream behavior on an isolated branch based on the configured fork revision. Review dependencies and preserve the remaining fork commits; do not claim the fork is fully reconciled. Record the selected upstream commit, omissions, and validation in the changelog and architecture documentation.
+For a scoped fix, adopt the relevant upstream behavior on the configured fork revision and preserve the remaining fork commits. Record the selected upstream change, omissions and validation in the existing changelog and architecture documentation. Test unpublished code with the isolated checkout mode in `AGENTS.md`; normal Pi sessions use the published Git package.
 
-Pi can load a verified local package directory without copying it. Configuration source must declare that development channel explicitly for Windows, using a stable source checkout path. Build and test the source first, commit it, then commit and apply the scoped chezmoi reference. Preserve the old installed clone. Verify the newly configured source in a fresh Pi process; report that existing sessions still need restart or reload. Remote branch/mirror equality is not a completion claim for this route.
+When publication is authorized, run the verification in step 3A, commit the reviewed files, and fast-forward the existing branch on `origin` and `byco`. Update the Pi-managed package and prove the active runtime as in step 4. This route does not rebase onto upstream or update the main mirrors. The upstream npm release gates remain defined in `docs/RELEASE.md`.
 
-The current focused adoption retains all 13 fork commits through `296745d`: Windows shim resolution and build inclusion, bounded timeout/abort and process-tree cleanup, native process fixtures, fork lineage and reconciliation guidance, and native Windows smoke instructions. Upstream `1f8cac2` was reviewed for instruction ownership only; equivalence of its newer Windows transport is unproven. Full rebase or retirement remains a separate reconciliation.
+*Complete when the published branch and installed clone match the verified commit, and the fresh Pi runtime passes the smoke.*
 
 ## 3A. Keep and update the fork branch
 

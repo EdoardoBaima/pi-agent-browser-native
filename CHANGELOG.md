@@ -2,11 +2,19 @@
 
 ## Unreleased
 
+### Breaking Changes
+
+- Requires Pi 1.1.0 or newer for structured prompt sections. Update Pi before using this revision; the package doctor reports older versions as unsupported.
+
 ### Changed
 
-- Adopt upstream `bf7d06f` instruction delivery through Pi-owned prompt sections. Browser guidance no longer forces a full system prompt when ordinary text contains words such as `snapshot`.
-- Compose the full browser playbook and effective trusted configuration in one section; remove duplicate tool guidance and obsolete per-layer config projections. Explicit custom prompt semantics remain Pi-owned.
-- Require and validate against Pi 1.1.0. Retain the Windows command-resolution and bounded process-termination fixes from fork revision `296745d`.
+- Browser instructions now include the full playbook and effective configuration in one Pi-owned section. Trusted project settings replace global guidance without duplicate or conflicting values; explicit custom prompts retain Pi's normal semantics.
+
+### Fixed
+
+- Preserved structured host instructions when user text contains words such as `snapshot`, resolving the observed HTTP 400 rejection in the custom Claude Agent SDK provider. Browser guidance no longer replaces the entire system prompt based on message keywords.
+- Fixed native Windows tool and doctor launches from npm/fnm installations by resolving supported `.cmd` shims to direct executable invocations. Arguments no longer pass through PowerShell, and the command resolver is included in package builds.
+- Timeout and cancellation return a bounded failure even when the child process emits no completion event. Windows process-tree cleanup runs before direct child termination; results expose `forcedResult`, `forcedResultReason`, and `processTreeCleanup` diagnostics.
 
 ### Validation
 
