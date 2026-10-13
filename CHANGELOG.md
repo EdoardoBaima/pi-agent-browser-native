@@ -18,9 +18,11 @@
 
 ### Validation
 
-- Native Windows: 72 focused instruction/configuration/provider-pipeline tests passed; 39 process tests passed with two POSIX-only skips. Build, typecheck, package contents, and live upstream command-reference sampling passed. A whole-prompt-return mutation fails the new composition regression.
-- Isolated `claude-agent-sdk/claude-opus-5-5` replay reproduced the old 400 rejection for the original message both after `ping` and as a first turn. Both sequences pass with this change; the second turn continues the SDK conversation. Custom prompts remain explicit. Native browser version/open/snapshot/title/close smoke passed.
-- The full Windows gate remains red: 709 passed, 72 failed, 10 skipped. Eight config-CLI failures also reproduce on untouched `296745d`; other failures include POSIX-only fixtures, Windows PATH handling and unsupported `tar.exe --force-local`. This focused adoption is not a full release qualification.
+- Windows use is verified: Pi installed the published Git fork at `fe8f03a`, and its compiled code matched the reviewed source. A fresh Pi session loaded that installation and passed browser version/open/snapshot/title/close checks. Normal use does not require repairing the checking-script defects below.
+- Focused verification passed: 111 tests, two POSIX-only skips, build, typecheck, package loading, and 58 live command-reference checks. Direct startup profiling passed at 241.5 ms maximum against a 250 ms limit; a separate timing test previously exceeded that limit.
+- The original Claude message works both as a first turn and after `ping`. The isolated replay reproduced the old 400 error and passed both sequences with this fix. Custom prompts remain explicit; a whole-prompt-return mutation fails the composition regression.
+- Maintenance tooling: package verification passes with Git's GNU tar; Windows' default tar rejects `--force-local`. Inherited startup and command-reference scripts have Windows entry guards that skip their checks; direct invocation supplied the verification above. These defects affect checking commands, not normal package loading or browser execution.
+- Full release verification remains incomplete. The earlier Windows suite reported 709 passes, 72 failures and 10 skips. Eight config-CLI failures also reproduce on the previous fork revision, `296745d`; the remaining failures have not all been attributed.
 
 ## 0.6.3 - 2026-09-01
 

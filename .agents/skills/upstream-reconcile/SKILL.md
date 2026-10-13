@@ -18,7 +18,7 @@ Treat the remote roles in `AGENTS.md` as authoritative.
 
 ## 1. Establish truth
 
-Read state before choosing an operation:
+Read the [current validation evidence](../../../CHANGELOG.md#unreleased) before planning checks. Report effects on normal Windows use separately from remaining release checks. Then inspect repository and installation state:
 
 ```bash
 git status --short --branch
