@@ -92,7 +92,7 @@ Browser default config is intentionally advisory. It can add prompt guidance for
 
 ### Instruction ownership
 
-The browser contributes its full operating playbook through `systemPromptOptions.sections.agent_browser` on each turn. Pi owns composition and instruction history; providers own transport rendering. Browser instructions never replace the full system prompt or depend on words in user messages. Explicit custom system prompts keep Pi's normal semantics.
+The browser contributes compact startup rules through `systemPromptOptions.sections.agent_browser` on each turn. These cover the first open → snapshot → ref action, artifact verification, session cleanup, and pointers to specialized workflows in the installed command reference and tool contract. The full playbook stays in the documentation. The provider-pipeline regression caps this section at 6,000 characters with ordinary configured profile, executable, and optional web-search guidance. Pi owns composition and instruction history; providers own transport rendering. Browser instructions never replace the full system prompt or depend on words in user messages. Explicit custom system prompts keep Pi's normal semantics.
 
 `playbook.ts` owns static guidance and generated documentation fragments. The section adds absolute installed documentation paths and the effective browser configuration from the existing global → trusted project → override merge. Each setting appears once; a partial override retains inherited fields. The trust decision controls project loading before composition. Tools do not duplicate these instructions in `promptGuidelines`.
 

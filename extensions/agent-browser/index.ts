@@ -13,9 +13,6 @@ import { Text } from "@earendil-works/pi-tui";
 import { batchHasSuccessfulCloseAll, getSuccessfulBatchCloseLifecycle } from "./lib/batch-lifecycle.js";
 import {
 	PROJECT_RULE_PROMPT,
-	QUICK_START_GUIDELINES,
-	SHARED_BROWSER_PLAYBOOK_GUIDELINES,
-	WRAPPER_TAB_RECOVERY_BEHAVIOR,
 	WEB_SEARCH_TOOL_PROMPT_GUIDELINES,
 	buildToolPromptGuidelines,
 } from "./lib/playbook.js";
@@ -1429,9 +1426,6 @@ export default function agentBrowserExtension(pi: ExtensionAPI) {
 				includeWebSearch: webSearchToolRegistered,
 				docs: getInstalledDocsPaths(),
 			}),
-			...QUICK_START_GUIDELINES,
-			...SHARED_BROWSER_PLAYBOOK_GUIDELINES,
-			...WRAPPER_TAB_RECOVERY_BEHAVIOR,
 			...(webSearchToolRegistered ? WEB_SEARCH_TOOL_PROMPT_GUIDELINES : []),
 		];
 		// Pi owns prompt history and provider rendering; returning systemPrompt forces a replacement.

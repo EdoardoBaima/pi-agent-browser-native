@@ -19,7 +19,7 @@ import {
 } from "../extensions/agent-browser/lib/argv-grammar.js";
 import { isRecord, parsePositiveInteger } from "../extensions/agent-browser/lib/parsing.js";
 import { LAUNCH_SCOPED_FLAGS } from "../extensions/agent-browser/lib/launch-scoped-flags.js";
-import { QUICK_START_GUIDELINES, SHARED_BROWSER_PLAYBOOK_GUIDELINES, TOOL_PROMPT_GUIDELINES_SUFFIX } from "../extensions/agent-browser/lib/playbook.js";
+import { SHARED_BROWSER_PLAYBOOK_GUIDELINES, TOOL_PROMPT_GUIDELINES_SUFFIX } from "../extensions/agent-browser/lib/playbook.js";
 import { getAgentBrowserSocketDir, getAgentBrowserSocketPathValidationError } from "../extensions/agent-browser/lib/process.js";
 import {
 	buildExecutionPlan,
@@ -1492,7 +1492,6 @@ test("buildExecutionPlan allows dash-starting --args values", () => {
 
 test("launch-scoped flag metadata is reflected in playbook and command reference guidance", () => {
 	const playbookText = [
-		...QUICK_START_GUIDELINES,
 		...SHARED_BROWSER_PLAYBOOK_GUIDELINES,
 		...TOOL_PROMPT_GUIDELINES_SUFFIX,
 	].join("\n");

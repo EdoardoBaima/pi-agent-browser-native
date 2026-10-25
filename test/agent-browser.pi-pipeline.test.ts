@@ -326,9 +326,10 @@ test("Pi pipeline composes browser instructions without forcing the prompt acros
 							assert.doesNotMatch(effective, projectAllowed ? /Global Profile|\/global\/browser/ : /Project Profile|\/project\/browser/);
 							assert.match(section, /--executable-path/);
 							assert.match(section, /profiles command still lists Chrome profiles only/);
-							assert.match(section, /Common advanced calls:/);
-							assert.match(section, /Standard workflow: open the page, snapshot -i/);
-							assert.match(section, /If upstream reports tab_gone/);
+							assert.ok(section.length < 6_000, `browser startup guidance must stay below 6,000 characters; got ${section.length}`);
+							assert.match(section, /snapshot.*-i/);
+							assert.match(section, /artifactVerification/);
+							assert.match(section, /details\.nextActions/);
 							assert.equal(effective.split("Use agent_browser with one input mode:").length - 1, 1);
 							if (projectAllowed) {
 								assert.equal(effective.split("Prefer agent_browser_web_search for current or external web facts").length - 1, 1);
