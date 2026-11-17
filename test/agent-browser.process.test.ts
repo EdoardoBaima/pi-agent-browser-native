@@ -349,8 +349,7 @@ test("runAgentBrowserProcess unwraps Windows node cmd shims into spawn args with
 			args: ["snapshot", "--compact"],
 			cwd: tempDir,
 			env: { PATH: tempDir },
-			platform: "win32",
-		});
+		}, { platform: "win32" });
 
 		assert.equal(processResult.exitCode, 0);
 		assert.equal(processResult.spawnError, undefined);
@@ -527,6 +526,7 @@ test("runAgentBrowserProcess stops a hung upstream client at the wrapper watchdo
 			cwd: tempDir,
 			env: { PATH: `${tempDir}${delimiter}${basePath}` },
 			timeoutMs: 100,
+		}, {
 			windowsTaskkill: async (pid) => ({
 				attempted: true,
 				exitCode: 0,
@@ -615,10 +615,11 @@ test("runAgentBrowserProcess returns a forced timeout result when upstream never
 		const processResult = await runAgentBrowserProcess({
 			args: ["--version"],
 			cwd: tempDir,
+			timeoutMs: 10,
+		}, {
 			forcedResultGraceMs: 50,
 			platform: "linux",
 			spawnProcess: () => child,
-			timeoutMs: 10,
 		});
 
 		assert.equal(processResult.timedOut, true);
@@ -656,14 +657,15 @@ test("runAgentBrowserProcess returns a forced abort result when upstream never e
 			args: ["--version"],
 			cwd: tempDir,
 			env: { PATH: "" },
+			signal: controller.signal,
+			timeoutMs: 25,
+		}, {
 			forcedResultGraceMs: 50,
 			platform: "win32",
-			signal: controller.signal,
 			spawnProcess: () => {
 				setImmediate(() => controller.abort());
 				return child;
 			},
-			timeoutMs: 25,
 			windowsTaskkill: async (pid) => {
 				cleanupPids.push(pid);
 				resolveCleanupStarted?.();
@@ -821,6 +823,7 @@ test("runAgentBrowserProcess returns timeout exit code when descendants keep std
 				PI_AGENT_BROWSER_TEST_LINGER_PID_PATH: lingerPidPath,
 			},
 			timeoutMs,
+		}, {
 			windowsTaskkill: async (pid) => ({
 				attempted: true,
 				exitCode: 0,

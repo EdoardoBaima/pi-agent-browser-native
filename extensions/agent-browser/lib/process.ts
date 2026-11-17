@@ -434,37 +434,43 @@ function getManagedPreSpawnPolicyError(
 	});
 }
 
-export async function runAgentBrowserProcess(options: {
-	args: string[];
-	cwd: string;
-	env?: NodeJS.ProcessEnv;
-	/** Testing seam for forced-settlement coverage; production callers use the default grace. */
-	forcedResultGraceMs?: number;
-	managedSessionRestoreState?: ManagedSessionRestoreState;
-	managedStateCurrentPageUrl?: string;
-	managedStatePageUrlUnknown?: boolean;
-	ownedManagedSession?: boolean;
-	/** Testing seam for platform-specific command resolution and cleanup coverage; production callers use the current process platform. */
-	platform?: NodeJS.Platform;
-	preserveAttachedBrowserSession?: boolean;
-	/** Testing seam for subprocess lifecycle coverage; production callers use node:child_process.spawn. */
-	spawnProcess?: SpawnAgentBrowserProcess;
-	signal?: AbortSignal;
-	/** Testing seam for Windows cleanup wiring; production callers use the bounded taskkill runner. */
-	windowsTaskkill?: (pid: number) => Promise<ProcessTreeCleanupResult>;
-	stdin?: string;
-	timeoutMs?: number;
-	trustedFirstBatchTabSelection?: boolean;
-}): Promise<ProcessRunResult> {
+export interface AgentBrowserProcessHost {
+	forcedResultGraceMs: number;
+	platform: NodeJS.Platform;
+	spawnProcess: SpawnAgentBrowserProcess;
+	windowsTaskkill: (pid: number) => Promise<ProcessTreeCleanupResult>;
+}
+
+const DEFAULT_AGENT_BROWSER_PROCESS_HOST: AgentBrowserProcessHost = {
+	forcedResultGraceMs: PROCESS_FORCED_RESULT_GRACE_MS,
+	platform: processPlatform,
+	spawnProcess: spawn,
+	windowsTaskkill: (pid) => runWindowsTaskkill(pid),
+};
+
+export async function runAgentBrowserProcess(
+	options: {
+		args: string[];
+		cwd: string;
+		env?: NodeJS.ProcessEnv;
+		managedSessionRestoreState?: ManagedSessionRestoreState;
+		managedStateCurrentPageUrl?: string;
+		managedStatePageUrlUnknown?: boolean;
+		ownedManagedSession?: boolean;
+		preserveAttachedBrowserSession?: boolean;
+		signal?: AbortSignal;
+		stdin?: string;
+		timeoutMs?: number;
+		trustedFirstBatchTabSelection?: boolean;
+	},
+	hostOverrides: Partial<AgentBrowserProcessHost> = {},
+): Promise<ProcessRunResult> {
 	const { cwd, env, managedSessionRestoreState, managedStateCurrentPageUrl, managedStatePageUrlUnknown, signal, stdin, trustedFirstBatchTabSelection } = options;
+	const { forcedResultGraceMs, platform, spawnProcess, windowsTaskkill } = { ...DEFAULT_AGENT_BROWSER_PROCESS_HOST, ...hostOverrides };
 	const preserveAttachedBrowserSession = options.preserveAttachedBrowserSession === true || attachedBrowserSessionContext.getStore() === true;
 	const ownedManagedSession = options.ownedManagedSession === true || isOwnedManagedSessionTarget(options.args);
 	const args = options.args;
 	const timeoutMs = options.timeoutMs ?? getAgentBrowserProcessTimeoutMs();
-	const forcedResultGraceMs = options.forcedResultGraceMs ?? PROCESS_FORCED_RESULT_GRACE_MS;
-	const platform = options.platform ?? processPlatform;
-	const spawnProcess = options.spawnProcess ?? spawn;
-	const windowsTaskkill = options.windowsTaskkill ?? runWindowsTaskkill;
 	if (signal?.aborted) {
 		return { aborted: true, agentBrowserStarted: false, exitCode: 1, stderr: "", stdout: "", timedOut: false };
 	}
