@@ -115,12 +115,9 @@ async function readFileIfPresent(path: string): Promise<string | undefined> {
 }
 
 async function assertInstalledAgentBrowserVersion(): Promise<string> {
-	let stdout: string;
-	try {
-		({ stdout } = await execFileAsync("agent-browser", ["--version"], { timeout: 10_000 }));
-	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
-		assert.fail(`agent-browser ${MINIMUM_AGENT_BROWSER_VERSION} or newer is required on PATH for real-upstream tests: ${message}`);
+	const { exitCode, spawnError, stderr, stdout } = await runAgentBrowserProcess({ args: ["--version"], cwd: process.cwd(), timeoutMs: 10_000 });
+	if (exitCode !== 0) {
+		assert.fail(`agent-browser ${MINIMUM_AGENT_BROWSER_VERSION} or newer is required on PATH for real-upstream tests: ${spawnError?.message ?? stderr}`);
 	}
 	const installedVersion = stdout.trim().replace(/^agent-browser\s+/, "");
 	assert.ok(
