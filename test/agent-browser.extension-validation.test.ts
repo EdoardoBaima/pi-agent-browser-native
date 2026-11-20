@@ -574,6 +574,10 @@ process.stdout.write(JSON.stringify({ success: true, data: { ok: true } }));`,
 			assert.equal((result.details?.snapshotFilter as { search?: string; matchedRefs?: number } | undefined)?.search, "checkout");
 			assert.equal((result.details?.snapshotFilter as { matchedRefs?: number } | undefined)?.matchedRefs, 1);
 			assert.deepEqual((result.details?.refSnapshot as { refIds?: string[] } | undefined)?.refIds, ["e1", "e2", "e3"]);
+
+			const reordered = await executeRegisteredTool(harness.tool, harness.ctx, { args: ["snapshot", "-i", "--search", "Checkout BUTTON"] });
+			assert.match(reordered.content[0]?.text ?? "", /Snapshot filter: 1\/3 direct refs matched search "Checkout BUTTON"; 1 surrounding snapshot line shown\./);
+			assert.doesNotMatch(reordered.content[0]?.text ?? "", /Cart/);
 			const invocations = await readInvocationLog(logPath);
 			assert.equal(invocations.some((entry) => entry.args.includes("--search")), false);
 			assert.ok(invocations.some((entry) => entry.args.includes("snapshot") && entry.args.includes("-i")));
@@ -600,7 +604,7 @@ if (args.includes("snapshot")) {
 }
 if (args.includes("eval")) {
   const source = fs.readFileSync(0, "utf8");
-  const result = source.includes("does not match")
+  const result = source.includes('["does","not","match"]')
     ? { matches: [{ kind: "validation", offscreen: true, role: "alert", tagName: "div", text: "This destination does not match any configured notification channel." }], totalMatches: 1, truncated: false }
     : { matches: [{ kind: "text", name: "Add Channel", offscreen: false, tagName: "button", text: "Add Channel" }], totalMatches: 1, truncated: false };
   process.stdout.write(JSON.stringify({ success: true, data: { result } }));

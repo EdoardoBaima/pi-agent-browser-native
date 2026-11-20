@@ -74,9 +74,19 @@ interface RenderedTextSearchResult {
 
 const RENDERED_TEXT_SEARCH_MAX_MATCHES = 8;
 
+function toSearchTerms(search: string): string[] {
+	return search.toLowerCase().split(/\s+/).filter((term) => term.length > 0);
+}
+
+function matchesAllTerms(text: string, terms: readonly string[]): boolean {
+	const haystack = text.toLowerCase();
+	return terms.every((term) => haystack.includes(term));
+}
+
 function buildRenderedTextSearchEval(search: string): string {
 	return `(() => {
-  const query = ${JSON.stringify(search.trim().toLowerCase())};
+  const terms = ${JSON.stringify(toSearchTerms(search))};
+  const matchesAll = (text) => { const haystack = text.toLowerCase(); return terms.every((term) => haystack.includes(term)); };
   const limit = ${RENDERED_TEXT_SEARCH_MAX_MATCHES};
   const normalize = (value) => String(value ?? "").replace(/\\s+/g, " ").trim();
   const attributeTextOf = (element) => [element.getAttribute("aria-label"), element.getAttribute("title"), element.getAttribute("placeholder")].filter(Boolean).join(" ");
@@ -101,15 +111,15 @@ function buildRenderedTextSearchEval(search: string): string {
     }
     return null;
   };
-  const candidates = Array.from(document.querySelectorAll("body *")).filter((element) => searchableTextOf(element).toLowerCase().includes(query));
+  const candidates = Array.from(document.querySelectorAll("body *")).filter((element) => matchesAll(searchableTextOf(element)));
   const candidateSet = new Set(candidates);
   const minimal = candidates.filter((element) => !Array.from(element.children).some((child) => candidateSet.has(child)));
-  const rendered = minimal.filter((element) => isRendered(element) && renderedTextOf(element).toLowerCase().includes(query));
+  const rendered = minimal.filter((element) => isRendered(element) && matchesAll(renderedTextOf(element)));
   const matches = rendered.map((element, index) => {
     const semantic = validationAncestor(element);
     const source = semantic || element;
     const text = renderedTextOf(element);
-    const matchIndex = text.toLowerCase().indexOf(query);
+    const matchIndex = text.toLowerCase().indexOf(terms[0]);
     const start = Math.max(0, matchIndex - 80);
     const snippet = text.slice(start, start + 240);
     const rect = element.getBoundingClientRect();
@@ -215,20 +225,19 @@ function filterSnapshotData(data: unknown, request: SnapshotFilterRequest): { da
 	if (!isRecord(data)) return undefined;
 	const refs = isRecord(data.refs) ? data.refs : {};
 	const snapshot = typeof data.snapshot === "string" ? data.snapshot : "";
-	const normalizedSearch = request.search?.trim().toLowerCase();
+	const searchTerms = request.search ? toSearchTerms(request.search) : [];
 	const matchingRefIds = new Set<string>();
 	for (const [refId, refValue] of Object.entries(refs)) {
 		if (!isRecord(refValue)) continue;
 		const role = typeof refValue.role === "string" ? refValue.role.toLowerCase() : "";
 		const name = typeof refValue.name === "string" ? refValue.name : "";
 		const roleMatches = request.role ? role === request.role : true;
-		const searchMatches = normalizedSearch ? `${role} ${name}`.toLowerCase().includes(normalizedSearch) : true;
+		const searchMatches = matchesAllTerms(`${role} ${name}`, searchTerms);
 		if (roleMatches && searchMatches) matchingRefIds.add(refId);
 	}
 	const lines = snapshot.split(/\r?\n/);
 	const visibleLines = lines.filter((line) => {
-		const normalizedLine = line.toLowerCase();
-		if (normalizedSearch && normalizedLine.includes(normalizedSearch)) return true;
+		if (searchTerms.length > 0 && matchesAllTerms(line, searchTerms)) return true;
 		return [...matchingRefIds].some((refId) => line.includes(`[ref=${refId}]`) || line.includes(`ref=${refId}`));
 	});
 	const filteredRefs = Object.fromEntries(Object.entries(refs).filter(([refId]) => matchingRefIds.has(refId)));
