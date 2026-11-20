@@ -76,6 +76,7 @@ export async function buildToolPresentation(options: {
 	args?: string[];
 	artifactRequest?: ArtifactRequestContext;
 	batchArtifactRequests?: Array<ArtifactRequestContext | undefined>;
+	batchPlannedSteps?: string[][];
 	commandInfo: CommandInfo;
 	compiledSemanticAction?: CompiledAgentBrowserSemanticAction;
 	cwd: string;
@@ -130,6 +131,7 @@ export async function buildToolPresentation(options: {
 			namespace,
 			networkRoutes,
 			persistentArtifactStore,
+			plannedSteps: options.batchPlannedSteps,
 			sessionName,
 			summary,
 		});

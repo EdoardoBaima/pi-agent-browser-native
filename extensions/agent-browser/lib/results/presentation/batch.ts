@@ -13,6 +13,7 @@ import type {
 	AgentBrowserEnvelope,
 	AgentBrowserNextAction,
 	BatchFailurePresentationDetails,
+	BatchNotAttemptedStep,
 	BatchStepPresentationDetails,
 	FileArtifactMetadata,
 	NetworkRouteDiagnostic,
@@ -82,16 +83,35 @@ function formatBatchStepError(error: unknown): string {
 	return appendSelectorRecoveryHint(formattedErrorText);
 }
 
-function getBatchFailureDetails(steps: Array<{ details: BatchStepPresentationDetails }>): BatchFailurePresentationDetails | undefined {
+const NOT_ATTEMPTED_STEPS_VISIBLE_MAX = 10;
+
+function getBatchFailureDetails(steps: Array<{ details: BatchStepPresentationDetails }>, plannedSteps: readonly string[][]): BatchFailurePresentationDetails | undefined {
 	const failedSteps = steps.filter((step) => step.details.success === false);
 	if (failedSteps.length === 0) return undefined;
-	const successCount = steps.length - failedSteps.length;
+	const notAttemptedSteps = plannedSteps.slice(steps.length).map((command, offset) => {
+		const index = steps.length + offset;
+		const redactedCommand = redactInvocationArgs(command);
+		return { command: redactedCommand, commandText: formatBatchStepCommand(redactedCommand, index), index };
+	});
 	return {
 		failedStep: failedSteps[0].details,
 		failureCount: failedSteps.length,
-		successCount,
-		totalCount: steps.length,
+		notAttemptedSteps,
+		successCount: steps.length - failedSteps.length,
+		totalCount: steps.length + notAttemptedSteps.length,
 	};
+}
+
+function formatCompletedPrefix(failedStepIndex: number): string {
+	if (failedStepIndex === 0) return "No step completed before the failure.";
+	return failedStepIndex === 1 ? "Step 1 completed before the failure." : `Steps 1–${failedStepIndex} completed before the failure.`;
+}
+
+function formatNotAttemptedSteps(steps: readonly BatchNotAttemptedStep[]): string | undefined {
+	if (steps.length === 0) return undefined;
+	const shown = steps.slice(0, NOT_ATTEMPTED_STEPS_VISIBLE_MAX).map((step) => `step ${step.index + 1} — ${step.commandText}`);
+	const omitted = steps.length - shown.length;
+	return `Not attempted: ${shown.join("; ")}${omitted > 0 ? `; and ${omitted} more` : ""}`;
 }
 
 function hasModelFacingArgRedaction(args: string[] | undefined): boolean {
@@ -415,6 +435,7 @@ export async function buildBatchPresentation(options: {
 	namespace?: string;
 	networkRoutes?: NetworkRouteRecord[];
 	persistentArtifactStore?: PersistentSessionArtifactStore;
+	plannedSteps?: string[][];
 	sessionName?: string;
 	summary: string;
 }): Promise<ToolPresentation> {
@@ -449,7 +470,7 @@ export async function buildBatchPresentation(options: {
 		);
 	}
 
-	const batchFailure = getBatchFailureDetails(steps);
+	const batchFailure = getBatchFailureDetails(steps, options.plannedSteps ?? []);
 	const images = steps.flatMap((step) => getPresentationImages(step.presentation));
 	const artifacts = coalesceTerminalBatchRecordingArtifacts(steps, sessionName, namespace);
 	const artifactVerification = buildArtifactVerificationSummary(artifacts);
@@ -473,14 +494,16 @@ export async function buildBatchPresentation(options: {
 	const stepText = formatBatchStepsText(steps);
 	const batchSummary = batchFailure === undefined
 		? summary
-		: `Batch failed: ${batchFailure.successCount}/${batchFailure.totalCount} succeeded`;
+		: `Batch failed: ${batchFailure.successCount}/${batchFailure.totalCount} succeeded${batchFailure.notAttemptedSteps.length > 0 ? `; ${batchFailure.notAttemptedSteps.length} not attempted` : ""}`;
 	const failureHeader = batchFailure === undefined
 		? undefined
 		: [
 			batchSummary,
 			`First failing step: ${batchFailure.failedStep.index + 1} — ${batchFailure.failedStep.commandText}`,
+			formatCompletedPrefix(batchFailure.failedStep.index),
+			formatNotAttemptedSteps(batchFailure.notAttemptedSteps),
 			batchFailure.failureCount > 1 ? `${batchFailure.failureCount} steps failed. See the per-step results below.` : "See the per-step results below.",
-		].join("\n");
+		].filter((line): line is string => line !== undefined).join("\n");
 	const text = [failureHeader, mutationEvidenceText, stepText].filter((line): line is string => line !== undefined).join("\n\n");
 	const artifactRetentionSummary = currentArtifactManifest ? formatSessionArtifactRetentionSummary(currentArtifactManifest) : undefined;
 	const contentText = artifactRetentionSummary && manifestHasNewNoticeWorthyEntries(options.artifactManifest, currentArtifactManifest)

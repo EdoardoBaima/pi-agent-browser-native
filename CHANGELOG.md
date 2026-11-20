@@ -14,6 +14,7 @@
 
 ### Fixed
 
+- A failed `batch --bail`, `job` or `qa` counts every planned step. It names the steps that completed before the failure and lists each step that was not attempted in the visible header and `details.batchFailure.notAttemptedSteps`. It previously reported `1/2 succeeded` for a four-step plan that stopped at step 2.
 - Preserved structured host instructions when user text contains words such as `snapshot`, resolving the observed HTTP 400 rejection in the custom Claude Agent SDK provider. Browser guidance no longer replaces the entire system prompt based on message keywords.
 - Fixed native Windows tool and doctor launches from npm/fnm installations by resolving supported `.cmd` shims to direct executable invocations. Arguments no longer pass through PowerShell, and the command resolver is included in package builds.
 - Timeout and cancellation return a bounded failure even when the child process emits no completion event. Windows process-tree cleanup runs before direct child termination; results expose `forcedResult`, `forcedResultReason`, and `processTreeCleanup` diagnostics.

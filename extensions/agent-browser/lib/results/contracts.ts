@@ -178,9 +178,16 @@ export interface BatchStepPresentationDetails {
 	text: string;
 }
 
+export interface BatchNotAttemptedStep {
+	command: string[];
+	commandText: string;
+	index: number;
+}
+
 export interface BatchFailurePresentationDetails {
 	failedStep: BatchStepPresentationDetails;
 	failureCount: number;
+	notAttemptedSteps: BatchNotAttemptedStep[];
 	successCount: number;
 	totalCount: number;
 }
