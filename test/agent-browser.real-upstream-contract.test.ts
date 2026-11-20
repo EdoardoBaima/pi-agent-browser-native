@@ -115,12 +115,9 @@ async function readFileIfPresent(path: string): Promise<string | undefined> {
 }
 
 async function assertInstalledAgentBrowserVersion(): Promise<string> {
-	let stdout: string;
-	try {
-		({ stdout } = await execFileAsync("agent-browser", ["--version"], { timeout: 10_000 }));
-	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
-		assert.fail(`agent-browser ${MINIMUM_AGENT_BROWSER_VERSION} or newer is required on PATH for real-upstream tests: ${message}`);
+	const { exitCode, spawnError, stderr, stdout } = await runAgentBrowserProcess({ args: ["--version"], cwd: process.cwd(), timeoutMs: 10_000 });
+	if (exitCode !== 0) {
+		assert.fail(`agent-browser ${MINIMUM_AGENT_BROWSER_VERSION} or newer is required on PATH for real-upstream tests: ${spawnError?.message ?? stderr}`);
 	}
 	const installedVersion = stdout.trim().replace(/^agent-browser\s+/, "");
 	assert.ok(
@@ -947,6 +944,43 @@ if (!REAL_UPSTREAM_ENABLED) {
 		await assertRealUpstreamRestoreStorageSymlinkFailsClosed();
 		await assertRealUpstreamNestedRestoreStorageSymlinkFailsClosed();
 		await assertRealUpstreamRelativeHomeFailsClosed();
+	});
+
+	test("real upstream rerender under a held ref fails before the click acts", { timeout: 90_000 }, async () => {
+		await assertInstalledAgentBrowserVersion();
+		const tempDir = await mkdtemp(join(tmpdir(), "pi-agent-browser-real-held-ref-"));
+		let sessionName: string | undefined;
+		try {
+			const pagePath = join(tempDir, "invoice.html");
+			await writeFile(pagePath, '<!doctype html><title>untouched</title><div id="dialog"><p>Delete invoice A?</p><button onclick="document.title = \'deleted A\'">Delete</button></div>');
+			await withPatchedEnv({ HOME: tempDir }, async () => {
+				const harness = createExtensionHarness({ cwd: tempDir });
+				await runExtensionEvent(harness.handlers, "session_start", { reason: "new" }, harness.ctx);
+				const opened = await executeRegisteredTool(harness.tool, harness.ctx, { args: ["open", pathToFileURL(pagePath).href], sessionMode: "fresh" });
+				assert.equal(opened.isError, false, opened.content[0]?.text ?? "");
+				sessionName = typeof opened.details?.sessionName === "string" ? opened.details.sessionName : undefined;
+				const snapshot = await executeRegisteredTool(harness.tool, harness.ctx, { args: ["snapshot", "-i"] });
+				const heldRef = Object.entries((snapshot.details?.data as { refs?: Record<string, { name?: string }> }).refs ?? {}).find(([, ref]) => ref.name === "Delete")?.[0];
+				assert.ok(heldRef, "snapshot should expose the Delete button for invoice A");
+
+				const rerendered = await executeRegisteredTool(harness.tool, harness.ctx, {
+					args: ["eval", "--stdin"],
+					stdin: "document.getElementById('dialog').innerHTML = '<p>Delete invoice B?</p><button onclick=\"document.title = \\'deleted B\\'\">Delete</button>'; 1",
+				});
+				assert.equal(rerendered.isError, false, rerendered.content[0]?.text ?? "");
+
+				const click = await executeRegisteredTool(harness.tool, harness.ctx, { args: ["click", `@${heldRef}`] });
+				assert.equal(click.isError, true, "a ref held across a rerender must not click the replacement element");
+				assert.equal(click.details?.failureCategory, "stale-ref");
+				const title = await executeRegisteredTool(harness.tool, harness.ctx, { args: ["get", "title"] });
+				assert.equal(getResultValue(title.details ?? {}, ["title", "result"]), "untouched");
+				await executeRegisteredTool(harness.tool, harness.ctx, { args: ["close"] });
+				sessionName = undefined;
+			});
+		} finally {
+			await closeManagedSessionIfPresent({ cwd: tempDir, sessionName });
+			await rm(tempDir, { force: true, maxRetries: 20, recursive: true, retryDelay: 250 });
+		}
 	});
 
 	test("real upstream agent-browser plugin list stays sessionless", { timeout: 60_000 }, async () => {

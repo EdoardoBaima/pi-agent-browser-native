@@ -57,7 +57,7 @@ function buildLargeOutputFailureContext(presentation: ToolPresentation): string[
 	const lines = [
 		"Failure context:",
 		`- First failing step: ${failedStep.index + 1} — ${commandText}`,
-		`- Batch result: ${failure.successCount}/${failure.totalCount} succeeded${failure.failureCount > 1 ? `; ${failure.failureCount} failed` : ""}`,
+		`- Batch result: ${failure.successCount}/${failure.totalCount} succeeded${failure.failureCount > 1 ? `; ${failure.failureCount} failed` : ""}${failure.notAttemptedSteps.length > 0 ? `; ${failure.notAttemptedSteps.length} not attempted` : ""}`,
 	];
 	if (failedStep.failureCategory) lines.push(`- Failure category: ${failedStep.failureCategory}`);
 	const failureText = (failedStep.text || failedStep.summary).replace(/\s+/g, " ").trim();

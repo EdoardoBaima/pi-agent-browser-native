@@ -1420,3 +1420,54 @@ process.stdin.on("end", () => {
 		await rm(tempDir, { force: true, recursive: true });
 	}
 });
+
+test("agentBrowserExtension reports the steps a failed fail-fast job never attempted", { concurrency: false }, async () => {
+	const tempDir = await mkdtemp(join(tmpdir(), "pi-agent-browser-job-not-attempted-"));
+	const basePath = process.env.PATH ?? "";
+	await writeFakeAgentBrowserBinary(
+		tempDir,
+		`const fs = require("node:fs");
+const args = process.argv.slice(2);
+if (args.includes("batch")) {
+  const steps = JSON.parse(fs.readFileSync(0, "utf8"));
+  const rows = [];
+  for (const command of steps) {
+    const failed = command.includes("#missing");
+    rows.push(failed
+      ? { command, success: false, result: null, error: "Element not found: #missing." }
+      : { command, success: true, result: { ok: true }, error: null });
+    if (failed && args.includes("--bail")) break;
+  }
+  process.stdout.write(JSON.stringify(rows));
+  process.exitCode = 1;
+  return;
+}
+process.stdout.write(JSON.stringify({ success: true, data: { ok: true } }));`,
+	);
+
+	try {
+		await withPatchedEnv({ PATH: `${tempDir}:${basePath}` }, async () => {
+			const harness = createExtensionHarness({ cwd: tempDir });
+			await runExtensionEvent(harness.handlers, "session_start", { reason: "new" }, harness.ctx);
+			const result = await executeRegisteredTool(harness.tool, harness.ctx, {
+				job: { steps: [
+					{ action: "open", url: "https://example.test/" },
+					{ action: "click", selector: "#missing" },
+					{ action: "click", selector: "#save" },
+					{ action: "click", selector: "#confirm" },
+				] },
+			});
+
+			assert.equal(result.isError, true);
+			const text = result.content[0]?.text ?? "";
+			assert.match(text, /Batch failed: 1\/4 succeeded; 2 not attempted/);
+			assert.match(text, /Step 1 completed before the failure\./);
+			assert.match(text, /Not attempted: step 3 — click #save; step 4 — click #confirm/);
+			const batchFailure = result.details?.batchFailure as { notAttemptedSteps?: Array<{ commandText?: string; index?: number }>; totalCount?: number } | undefined;
+			assert.equal(batchFailure?.totalCount, 4);
+			assert.deepEqual(batchFailure?.notAttemptedSteps?.map((step) => [step.index, step.commandText]), [[2, "click #save"], [3, "click #confirm"]]);
+		});
+	} finally {
+		await rm(tempDir, { force: true, recursive: true });
+	}
+});
