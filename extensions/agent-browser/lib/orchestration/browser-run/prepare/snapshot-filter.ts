@@ -1,6 +1,7 @@
 import { isRecord } from "../../../parsing.js";
 import { buildAgentBrowserResultCategoryDetails } from "../../../results/categories.js";
 import { buildSnapshotPresentation } from "../../../results/snapshot.js";
+import { applySnapshotArtifactManifest, writeSnapshotSpillFile } from "../../../results/snapshot-spill.js";
 import { extractRefSnapshotFromData, type SessionRefSnapshot } from "../../../session-page-state.js";
 import { redactSensitiveText, type CompatibilityWorkaround } from "../../../runtime.js";
 import { collectScrollPositionSnapshot } from "../diagnostics.js";
@@ -284,24 +285,27 @@ export async function trySnapshotFilter(options: {
 	const fullSnapshot = extractRefSnapshotFromData(snapshotData);
 	const diff = request.diff ? buildSnapshotDiff(options.previousRefSnapshot, fullSnapshot) : undefined;
 	if (fullSnapshot) options.sessionPageState.applyRefSnapshot({ sessionName: options.sessionStateKey ?? options.sessionName, snapshot: fullSnapshot, update: options.sessionPageStateUpdate });
-	const presentation = await buildSnapshotPresentation(filtered.data, options.persistentArtifactStore, options.artifactManifest);
-	const summary = request.role || request.search
-		? `Snapshot filter: ${filtered.matchedRefs}/${filtered.totalRefs} direct refs matched${request.role ? ` role=${request.role}` : ""}${request.search ? ` search ${JSON.stringify(request.search)}` : ""}; ${filtered.visibleLines} surrounding snapshot line${filtered.visibleLines === 1 ? "" : "s"} shown.`
+	const isFiltered = request.role !== undefined || request.search !== undefined;
+	const fullSnapshotSpill = isFiltered && isRecord(snapshotData) ? await writeSnapshotSpillFile(snapshotData, options.persistentArtifactStore).catch(() => undefined) : undefined;
+	const { artifactManifest: manifestWithFullSnapshot } = applySnapshotArtifactManifest({ baseManifest: options.artifactManifest, command: "snapshot", fullOutputPath: fullSnapshotSpill?.path, spill: fullSnapshotSpill });
+	const presentation = await buildSnapshotPresentation(filtered.data, options.persistentArtifactStore, manifestWithFullSnapshot ?? options.artifactManifest);
+	const summary = isFiltered
+		? `Snapshot filter: ${filtered.matchedRefs}/${filtered.totalRefs} direct refs matched${request.role ? ` role=${request.role}` : ""}${request.search ? ` search ${JSON.stringify(request.search)}` : ""}; ${filtered.visibleLines} surrounding snapshot line${filtered.visibleLines === 1 ? "" : "s"} shown.${fullSnapshotSpill ? `\nFull snapshot path: ${fullSnapshotSpill.path}` : ""}`
 		: request.diff
 			? diff?.summary ?? "Snapshot diff unavailable."
 			: "Snapshot viewport metadata collected.";
 	const viewportText = viewport ? `Viewport: ${viewport.innerWidth}×${viewport.innerHeight}, scroll ${viewport.scrollX},${viewport.scrollY}, document ${viewport.scrollWidth}×${viewport.scrollHeight}, sampled scroll containers ${viewport.containers.length}/${viewport.containerCount}.` : undefined;
-	const diffText = diff && (request.role || request.search) ? diff.summary : undefined;
+	const diffText = diff && isFiltered ? diff.summary : undefined;
 	const renderedTextSearchText = formatRenderedTextSearchMatches(renderedTextSearch);
 	const prefix = [summary, renderedTextSearchText, diffText, viewportText].filter((line): line is string => line !== undefined).join("\n\n");
 	if (presentation.content[0]?.type === "text") presentation.content[0] = { ...presentation.content[0], text: `${prefix}\n\n${presentation.content[0].text}` };
 	return {
-		artifactManifest: presentation.artifactManifest,
+		artifactManifest: presentation.artifactManifest ?? manifestWithFullSnapshot,
 		result: {
 			content: presentation.content,
 			details: {
 				args: options.redactedArgs,
-				artifactManifest: presentation.artifactManifest,
+				artifactManifest: presentation.artifactManifest ?? manifestWithFullSnapshot,
 				artifactRetentionSummary: presentation.artifactRetentionSummary,
 				command: "snapshot",
 				compatibilityWorkaround: options.compatibilityWorkaround,
@@ -312,7 +316,7 @@ export async function trySnapshotFilter(options: {
 				refSnapshot: fullSnapshot,
 				sessionMode: options.sessionMode,
 				snapshotDiff: diff,
-				snapshotFilter: request.role || request.search ? { cleanArgs: request.cleanArgs, matchedRefs: filtered.matchedRefs, renderedTextMatches: renderedTextSearch?.matches, renderedTextTotalMatches: renderedTextSearch?.totalMatches, renderedTextTruncated: renderedTextSearch?.truncated, role: request.role, search: request.search, totalLines: filtered.totalLines, totalRefs: filtered.totalRefs, visibleLines: filtered.visibleLines } : undefined,
+				snapshotFilter: isFiltered ? { cleanArgs: request.cleanArgs, fullSnapshotPath: fullSnapshotSpill?.path, matchedRefs: filtered.matchedRefs, renderedTextMatches: renderedTextSearch?.matches, renderedTextTotalMatches: renderedTextSearch?.totalMatches, renderedTextTruncated: renderedTextSearch?.truncated, role: request.role, search: request.search, totalLines: filtered.totalLines, totalRefs: filtered.totalRefs, visibleLines: filtered.visibleLines } : undefined,
 				snapshotViewport: viewport,
 				...buildAgentBrowserResultCategoryDetails({ args: options.effectiveArgs, command: "snapshot", succeeded: true }),
 				...buildSessionDetailFields(options.sessionName, options.usedImplicitSession, options.namespace, options.managedSessionRestoreDisabled()),

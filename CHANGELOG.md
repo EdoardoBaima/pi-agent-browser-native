@@ -9,6 +9,7 @@
 ### Changed
 
 - `snapshot -i --search` matches every whitespace-separated term in any order, case-insensitively. `--search "checkout button"` now finds a button named "Proceed to checkout".
+- Filtered snapshots (`--search`, `--filter role=`) keep the unfiltered snapshot in a spill file and report it as `Full snapshot path` and `details.snapshotFilter.fullSnapshotPath`.
 - Browser instructions now include compact startup rules, targeted documentation pointers, and effective configuration in one Pi-owned section. Specialized workflows stay in the installed documentation instead of every session's prompt. Trusted project settings replace global guidance without duplicate or conflicting values; explicit custom prompts retain Pi's normal semantics.
 
 ### Fixed

@@ -574,6 +574,10 @@ process.stdout.write(JSON.stringify({ success: true, data: { ok: true } }));`,
 			assert.equal((result.details?.snapshotFilter as { search?: string; matchedRefs?: number } | undefined)?.search, "checkout");
 			assert.equal((result.details?.snapshotFilter as { matchedRefs?: number } | undefined)?.matchedRefs, 1);
 			assert.deepEqual((result.details?.refSnapshot as { refIds?: string[] } | undefined)?.refIds, ["e1", "e2", "e3"]);
+			const fullSnapshotPath = (result.details?.snapshotFilter as { fullSnapshotPath?: string } | undefined)?.fullSnapshotPath;
+			assert.ok(fullSnapshotPath, "a filtered snapshot should keep the unfiltered snapshot on disk");
+			assert.ok((result.content[0]?.text ?? "").includes(`Full snapshot path: ${fullSnapshotPath}`));
+			assert.match(await readFile(fullSnapshotPath, "utf8"), /Theme/);
 
 			const reordered = await executeRegisteredTool(harness.tool, harness.ctx, { args: ["snapshot", "-i", "--search", "Checkout BUTTON"] });
 			assert.match(reordered.content[0]?.text ?? "", /Snapshot filter: 1\/3 direct refs matched search "Checkout BUTTON"; 1 surrounding snapshot line shown\./);
